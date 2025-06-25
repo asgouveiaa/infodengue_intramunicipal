@@ -1,0 +1,201 @@
+---
+title: "Relatório Joinville"
+author: "Ayrton e Thaís"
+date: "2025-06-24"
+output: 
+  pdf_document:
+    includes:
+      in_header: header.tex
+    extra_dependencies: ["fancyhdr", "graphicx", "adjustbox"]
+geometry: "top=4cm, bottom=2.5cm, left=3cm, right=3cm, headheight=36pt"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+# Verifica se os logos existem
+if(!file.exists("logo1.png")) stop("logo1.png não encontrado!")
+if(!file.exists("logo2.png")) stop("logo2.png não encontrado!")
+```
+
+\vspace*{2cm} <!-- Espaço para o cabeçalho -->
+
+```{r}
+pacman::p_load(tidyverse,sf,lubridate,magrittr)
+```
+
+
+```{r carregando dados, eval=FALSE, include=FALSE}
+## carregando dados
+
+# população estimada
+jv_pop <- read_csv2("./dados_ref/joinville_pop.csv") %>% 
+  mutate(nome_bairr = iconv(nome_bairr, to = "ASCII//TRANSLIT"))
+
+# referência bairros
+jv_ref <- read_csv2("./dados_ref/JOINVILLE.csv", locale = locale(encoding = "Latin1")) %>% 
+  mutate(nome_bairr = iconv(nome_bairr, to = "ASCII//TRANSLIT"))
+
+# shape
+jv_shp <- read_sf("./shapes/joinville_hotspots.shp")
+
+# lendo os dados
+ler_dados_dengue <- function(ano) {
+  caminho <- paste0("./dados_sinan/DENGON_SC_", ano, ".dbf")
+  dados <- read.dbf(caminho) %>%
+    filter(ID_MUNICIP == "420910", ID_MN_RESI == "420910") %>%
+    select(NU_NOTIFIC, NU_ANO, SEM_NOT, SG_UF_NOT, ID_UNIDADE, 
+           ID_BAIRRO, NM_BAIRRO, ID_RG_RESI, ID_MN_RESI, CLASSI_FIN)
+  return(dados)
+}
+
+# Usar aqui com os dados baixados (mas esses não vão ser usados no boletim, certo?)
+if(F){
+# Anos de interesse
+anos <- 2020:2025
+
+# Aplicar a função a todos os anos e criar objetos individuais
+list2env(
+  setNames(lapply(anos, ler_dados_dengue), paste0("dengJV", anos)),
+  envir = .GlobalEnv
+)
+
+dengJV20_25 <- rbind(dengJV2020,dengJV2021,dengJV2022,dengJV2023,dengJV2024,dengJV2025)
+}
+```
+
+```{r organizando dados, include=FALSE}
+# Ajustando os dados atuais
+ano_atual <- year(Sys.Date())
+
+load('./dados_JV_20_25.Rdata')
+df <- jv_res_mapa_complete %>% 
+  select(NM_BAIRRO_REF,SEM_NOT,ano,id_bairro,notificações,pop,inc,geometry)
+
+dados_api <- read.csv('./dengue_1-26.csv')
+
+
+
+```
+
+# Município
+```{r análise dadosnowcast, eval=FALSE, include=FALSE}
+
+# incluir data de primeiros sintomas e de notificação
+
+```
+
+```{r Mun série temporal, receptividade climática, temperatura, Rt, include=FALSE}
+
+df %>% 
+  mutate(NM_BAIRRO_REF = factor(NM_BAIRRO_REF),
+         SEM_NOT = as.numeric(SEM_NOT),
+         ano = as.numeric(ano),
+         inc = notificações/pop*1e5
+         ) %>% 
+  arrange(SEM_NOT) %>% 
+  filter(ano %in% c(ano_atual-1,ano_atual))  -> df2
+
+# semanas para plotar
+weeks_2_plot <- tail(unique(df2$SEM_NOT), 3)
+
+## falta inserir nowcast!
+
+## talvez os dados filtrados tenham deixado a curva com uma cara diferente da do site
+  
+df2 %>%
+  group_by(SEM_NOT) %>%  # Agrupa por semana epidemiológica
+  summarise(not_total = sum(notificações, na.rm = TRUE),
+            sum_pop = sum(pop,na.rm=T)) %>%
+  mutate(inc = not_total/sum_pop*1e5) %>% 
+  ggplot() + 
+  geom_line(aes(x=factor(SEM_NOT), y = inc, group = 1)) + 
+scale_x_discrete(
+  breaks = levels(factor(df2$SEM_NOT))[seq(1, nlevels(factor(df2$SEM_NOT)), by = 8)])+
+  labs(x = "Semanas Epidemiológicas" , y = "Casos por 100k pessoas",
+       title = paste0("Curva de incidência Joinville"," ",weeks_2_plot[3])) +
+  theme_minimal() 
+
+dados_api %<>% 
+  select(SE,nivel,receptivo,Rt,p_inc100k, tempmin) %>% 
+  mutate(ano = substr(SE,1,4)) %>% 
+  filter(ano %in% c(ano_atual-1,ano_atual))
+
+
+# incidencia
+dados_api %>% 
+  filter(SE <= weeks_2_plot[3]) %>% 
+  ggplot() +
+  geom_line(aes(x = factor(SE), y = p_inc100k, group = 1)) +
+   geom_segment(
+    aes(x = factor(SE), xend = factor(SE),y = 0,yend = p_inc100k,
+      color = factor(nivel)),linewidth = 0.7) +
+   scale_color_manual(name = "",
+    values = c("1" = "green3", "2" = "yellow3", "3" = "orange3", "4" = "red3"),
+    guide = guide_legend(override.aes = list(linewidth = 4))) +
+  scale_x_discrete(breaks = levels(factor(dados_api$SE))[seq(1,nlevels(factor(dados_api$SE)), by = 8)]) +
+  labs(x = "Semanas Epidemiológicas" , y = "Casos por 100k pessoas",
+       title = paste0("Curva de incidência Joinville"," ",weeks_2_plot[3])) +
+  theme_minimal()+
+  theme(legend.position = "top") -> m_inc
+  
+# receptividade e temperatura
+scale_factor <- max(dados_api$receptivo, na.rm = TRUE) / max(dados_api$tempmin, na.rm = TRUE)
+
+dados_api %>% 
+  filter(SE <= weeks_2_plot[3]) %>% 
+  ggplot() +
+  geom_rect(
+    aes(xmin = -Inf, xmax = Inf, ymin = 0, ymax = 1),
+    fill = "grey") +
+  geom_col(aes(x = factor(SE), y = receptivo, group = 1), fill = "steelblue") +
+  geom_line(aes(x = factor(SE), y = tempmin * scale_factor, group = 1), color = "orange", linewidth = 1) +
+  geom_hline(aes(yintercept = 18*scale_factor, color = "Limiar Favorável"), 
+             linewidth = 1, linetype = "dashed") +
+  scale_x_discrete(
+    breaks = levels(factor(dados_api$SE))[seq(1, nlevels(factor(dados_api$SE)), by = 8)]
+  ) +
+  scale_y_continuous(
+    name = "Receptividade climática",
+    sec.axis = sec_axis(~./scale_factor, name = "Temp. Mínima")) +
+  labs( x = "Semanas Epidemiológica",
+        title = "Receptividade climática e Temperatura Mínima por Semana", color = "") +
+  theme_minimal() +
+  theme(
+    axis.title.y.right = element_text(color = "black"),
+    axis.text.y.right = element_text(color = "black"),
+    axis.title.y.left = element_text(color = "black")
+  ) +
+  theme(legend.position = "top") -> m_rec
+
+
+
+# Rt
+dados_api %>% 
+  filter(SE <= weeks_2_plot[3]) %>% 
+  ggplot() +
+  geom_line(aes(x = factor(SE), y = Rt, group =1)) +
+  geom_hline(yintercept =  1 , linetype = 2, col = "red") +
+  scale_x_discrete(
+    breaks = levels(factor(dados_api$SE))[seq(1, nlevels(factor(dados_api$SE)), by = 8)]) +
+   labs(x = "Semanas Epidemiológicas" , y = "Casos por 100k pessoas",
+       title = paste0("Curva de Rt Joinville"," ","até"," ",weeks_2_plot[3])) +
+  theme_minimal() +
+  theme(legend.position = "top") -> m_rt
+
+```
+
+
+```{r echo=FALSE}
+print(m_inc)
+```
+
+```{r warning=FALSE}
+print(m_rec)
+```
+
+
+```{r}
+print(m_rt)
+```
+
+
