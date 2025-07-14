@@ -1,13 +1,17 @@
 ---
-title: "Relatório Joinville"
-author: "Ayrton e Thaís"
+title: "Relatório Municipal - Joinville"
+author: ''
 date: "2025-06-24"
-output: 
+output:
   pdf_document:
     includes:
       in_header: header.tex
-    extra_dependencies: ["fancyhdr", "graphicx", "adjustbox"]
-geometry: "top=4cm, bottom=2.5cm, left=3cm, right=3cm, headheight=36pt"
+    extra_dependencies:
+    - fancyhdr
+    - graphicx
+    - adjustbox
+  word_document: default
+geometry: top=4cm, bottom=2.5cm, left=3cm, right=3cm, headheight=36pt
 ---
 
 ```{r setup, include=FALSE}
@@ -20,36 +24,43 @@ if(!file.exists("logo2.png")) stop("logo2.png não encontrado!")
 \vspace*{2cm} <!-- Espaço para o cabeçalho -->
 
 ```{r}
-pacman::p_load(tidyverse,sf,lubridate,magrittr)
+pacman::p_load(tidyverse,sf,lubridate,magrittr,foreign,nowcaster,fuzzyjoin,cowplot,ggpattern, AlertTools, assertthat,epical)
+
+ano_atual <- year(Sys.Date())
+
 ```
 
 
-```{r carregando dados, eval=FALSE, include=FALSE}
+```{r carregando dados, include=FALSE, cache = TRUE}
 ## carregando dados
 
 # população estimada
-jv_pop <- read_csv2("./dados_ref/joinville_pop.csv") %>% 
+jv_pop <- read_csv2("~/Documents/relatorio/dados_ref/joinville_pop.csv") %>% 
   mutate(nome_bairr = iconv(nome_bairr, to = "ASCII//TRANSLIT"))
 
 # referência bairros
-jv_ref <- read_csv2("./dados_ref/JOINVILLE.csv", locale = locale(encoding = "Latin1")) %>% 
+jv_ref <- read_csv2("~/Documents/relatorio/dados_ref/JOINVILLE.csv", locale = locale(encoding = "Latin1")) %>% 
   mutate(nome_bairr = iconv(nome_bairr, to = "ASCII//TRANSLIT"))
 
 # shape
-jv_shp <- read_sf("./shapes/joinville_hotspots.shp")
+jv_shp <- read_sf("~/Documents/relatorio/shapes/joinville_hotspots.shp")
+
+# distritos
+#sp <- read_sf("./UBSF-CENSO-2025-Infodengue/UBSF-CENSO-2025-Infodengue.shp")
+sp <- read_sf("~/Documents/relatorio/UBSF-CENSO-2025-Infodengue/UBSF-CENSO-2025-Infodengue.shp")
 
 # lendo os dados
 ler_dados_dengue <- function(ano) {
-  caminho <- paste0("./dados_sinan/DENGON_SC_", ano, ".dbf")
+  caminho <- paste0("~/Documents/relatorio/dados_sinan/DENGON_SC_", ano, ".dbf")
   dados <- read.dbf(caminho) %>%
     filter(ID_MUNICIP == "420910", ID_MN_RESI == "420910") %>%
     select(NU_NOTIFIC, NU_ANO, SEM_NOT, SG_UF_NOT, ID_UNIDADE, 
-           ID_BAIRRO, NM_BAIRRO, ID_RG_RESI, ID_MN_RESI, CLASSI_FIN)
+           ID_BAIRRO, NM_BAIRRO, ID_RG_RESI, ID_MN_RESI, CLASSI_FIN,DT_SIN_PRI,DT_DIGITA)
   return(dados)
 }
 
 # Usar aqui com os dados baixados (mas esses não vão ser usados no boletim, certo?)
-if(F){
+
 # Anos de interesse
 anos <- 2020:2025
 
@@ -59,61 +70,192 @@ list2env(
   envir = .GlobalEnv
 )
 
-dengJV20_25 <- rbind(dengJV2020,dengJV2021,dengJV2022,dengJV2023,dengJV2024,dengJV2025)
-}
+dg2025 <- rbind(dengJV2020,dengJV2021,dengJV2022,dengJV2023,dengJV2024,dengJV2025)
+weeks_2_plot <- tail(unique(dg2025$SEM_NOT), 3)
+
 ```
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+# dados para níveis de alerta
+
+
+city <- geobr::read_municipality(code_muni = 4209102)
+
+load("~/Documents/relatorio/Joinville/clijv.RData")
+load("~/Documents/relatorio/Joinville/paramsjv.RData")
+
+```
+
 
 ```{r organizando dados, include=FALSE}
 # Ajustando os dados atuais
-ano_atual <- year(Sys.Date())
 
-load('./dados_JV_20_25.Rdata')
-df <- jv_res_mapa_complete %>% 
-  select(NM_BAIRRO_REF,SEM_NOT,ano,id_bairro,notificações,pop,inc,geometry)
-
-dados_api <- read.csv('./dengue_1-26.csv')
-
-
-
-```
-
-# Município
-```{r análise dadosnowcast, eval=FALSE, include=FALSE}
-
-# incluir data de primeiros sintomas e de notificação
-
-```
-
-```{r Mun série temporal, receptividade climática, temperatura, Rt, include=FALSE}
-
-df %>% 
-  mutate(NM_BAIRRO_REF = factor(NM_BAIRRO_REF),
-         SEM_NOT = as.numeric(SEM_NOT),
-         ano = as.numeric(ano),
-         inc = notificações/pop*1e5
-         ) %>% 
+# dados brutos
+dg2025  %>% 
+  filter(NU_ANO %in% c(ano_atual-1,ano_atual)) %>% 
   arrange(SEM_NOT) %>% 
-  filter(ano %in% c(ano_atual-1,ano_atual))  -> df2
+  rename_with(tolower) -> dg2
 
-# semanas para plotar
-weeks_2_plot <- tail(unique(df2$SEM_NOT), 3)
-
-## falta inserir nowcast!
-
-## talvez os dados filtrados tenham deixado a curva com uma cara diferente da do site
+#dados nowcasting
+dg2 %<>% select(nu_notific,nu_ano,sem_not,dt_sin_pri,dt_digita) %>% 
+  mutate(sem_not = substr(sem_not,5,6),
+         se_sin_prin = epiweek(dt_sin_pri),
+         ano_pri = year(dt_sin_pri)) %>% 
+  rename(ano_notif = nu_ano) %>% 
+  rename(se_notif = sem_not) %>% 
+  select(dt_digita, dt_sin_pri) %>% 
+  drop_na() %>% 
+  filter(year(dt_sin_pri) %in% c(ano_atual-2, ano_atual-1,ano_atual)) -> nowcastdg 
   
-df2 %>%
-  group_by(SEM_NOT) %>%  # Agrupa por semana epidemiológica
-  summarise(not_total = sum(notificações, na.rm = TRUE),
-            sum_pop = sum(pop,na.rm=T)) %>%
-  mutate(inc = not_total/sum_pop*1e5) %>% 
-  ggplot() + 
-  geom_line(aes(x=factor(SEM_NOT), y = inc, group = 1)) + 
-scale_x_discrete(
-  breaks = levels(factor(df2$SEM_NOT))[seq(1, nlevels(factor(df2$SEM_NOT)), by = 8)])+
-  labs(x = "Semanas Epidemiológicas" , y = "Casos por 100k pessoas",
-       title = paste0("Curva de incidência Joinville"," ",weeks_2_plot[3])) +
-  theme_minimal() 
+
+# alocando dados
+
+dg2025 %>%  # número de bairros após toupper
+  mutate(NM_BAIRRO = toupper(iconv(NM_BAIRRO, to = "Latin1"))) %>% 
+  filter(!is.na(NM_BAIRRO)) -> dengJV2
+
+jv_bairros_ref <- jv_ref %>% 
+  select(nome_bairr) %>% pull()
+
+jv_bairros_ref <- tibble(NM_BAIRRO_REF = jv_bairros_ref) 
+
+dengJV2 %<>%
+  mutate(NM_BAIRRO_NORM = NM_BAIRRO %>%
+           str_replace_all("[^A-Z0-9 ]", "") %>%
+           str_squish())
+
+bairros_parecidos <- stringdist_inner_join(
+  dengJV2, jv_bairros_ref,
+  by = c("NM_BAIRRO_NORM" = "NM_BAIRRO_REF"),
+  method = "lv",       # Levenshtein distance
+  max_dist = 2         # Ajuste esse valor conforme necessário
+)
+
+bairros_parecidos %>% 
+  group_by(NM_BAIRRO_REF,SEM_NOT) %>% 
+  summarise(
+    notificações = n()
+  ) %>% left_join(jv_pop, by = c("NM_BAIRRO_REF" = "nome_bairr")) %>% 
+  left_join(jv_shp,by = "id_bairro") 
+
+distrito_nowcast <- bairros_parecidos %>% 
+  select(NU_NOTIFIC,SEM_NOT,ID_BAIRRO,NM_BAIRRO_REF,DT_SIN_PRI,DT_DIGITA)
+
+bairros_parecidos %>% 
+  group_by(NM_BAIRRO_REF,SEM_NOT) %>% 
+  summarise(
+    notificações = n()
+  ) %>% left_join(jv_pop, by = c("NM_BAIRRO_REF" = "nome_bairr")) %>% 
+  left_join(jv_shp,by = "id_bairro") %>% 
+  select(NM_BAIRRO_REF,SEM_NOT,notificações,geometry) -> dg_bairros
+
+# Versão corrigida que garante todos os bairros em todos os anos
+anos_unicos <- unique(substr(dg_bairros$SEM_NOT, 1, 4))
+bairros_unicos <- unique(dg_bairros$NM_BAIRRO_REF)
+lista_completa <- list()
+
+for(ano in anos_unicos) {
+  # Filtrar dados para o ano atual
+  dados_ano <- dg_bairros %>% 
+    filter(substr(SEM_NOT, 1, 4) == ano) %>%
+    select(NM_BAIRRO_REF, SEM_NOT, notificações)
+  
+  # Extrair número da semana corretamente
+  semanas_ano <- as.numeric(substr(dados_ano$SEM_NOT, 5, 6))
+  total_SE <- ifelse(length(semanas_ano) > 0, max(semanas_ano), 0)
+  
+  # Gerar todas as semanas do ano (de 1 até total_SE)
+  semanas_completas <- if(total_SE > 0) sprintf("%s%02d", ano, 1:total_SE) else character(0)
+  
+  # Criar todas as combinações de bairros x semanas (usando a lista completa de bairros)
+  all_combinations <- expand.grid(
+    NM_BAIRRO_REF = bairros_unicos,  # Usa todos os bairros, não só os do ano
+    SEM_NOT = semanas_completas,
+    stringsAsFactors = FALSE
+  )
+  
+  # Completar os dados
+  dados_completos <- dados_ano %>%
+    right_join(all_combinations, by = c("NM_BAIRRO_REF", "SEM_NOT")) %>%
+    mutate(
+      notificações = replace_na(notificações, 0),
+      ano = ano  # Garante que o ano seja preenchido
+    )
+  
+  lista_completa[[ano]] <- dados_completos
+}
+
+dg_bairros_ok <- bind_rows(lista_completa) %>%
+  # Garantir ordem lógica dos anos/semanas
+  arrange(NM_BAIRRO_REF, SEM_NOT)
+
+# dados para plot curvas bairros e mapas
+dg_bairros_ok %<>%
+  left_join(jv_pop %>% select(-hptotal), by = c("NM_BAIRRO_REF" = "nome_bairr")) %>% 
+  left_join(jv_shp %>% select(id_bairro,geometry), by = "id_bairro")
+
+## incluindo distritos
+
+classificar_bairros_por_distrito <- function(sp_distritos, sp2_bairros) {
+  
+  # Verificar se ambos os objetos têm o mesmo CRS
+  if(st_crs(sp_distritos) != st_crs(sp2_bairros)) {
+    cat("Transformando CRS dos bairros para coincidir com os distritos...\n")
+    sp2_bairros <- st_transform(sp2_bairros, st_crs(sp_distritos))
+  }
+  
+  # Calcular centroides dos bairros para melhor precisão na classificação
+  centroides_bairros <- st_centroid(sp2_bairros)
+  
+  # Realizar interseção espacial usando os centroides
+  intersecao <- st_intersection(centroides_bairros, sp_distritos)
+  
+  # Se alguns bairros não intersectaram, usar st_nearest_feature como fallback
+  bairros_classificados <- sp2_bairros %>%
+    select(nome_bairr, id_bairro, geometry)
+  
+  # Adicionar informação do distrito para os que intersectaram
+  if(nrow(intersecao) > 0) {
+    bairros_com_distrito <- intersecao %>%
+      st_drop_geometry() %>%
+      select(nome_bairr, id_bairro, Distrito)
+    
+    bairros_classificados <- bairros_classificados %>%
+      left_join(bairros_com_distrito, by = c("nome_bairr", "id_bairro"))
+  }
+  
+  # Para bairros sem classificação, usar o distrito mais próximo
+  bairros_sem_distrito <- bairros_classificados %>%
+    filter(is.na(Distrito) | is.null(Distrito))
+  
+  if(nrow(bairros_sem_distrito) > 0) {
+    cat("Classificando", nrow(bairros_sem_distrito), "bairros usando distrito mais próximo...\n")
+    
+    # Encontrar distrito mais próximo para cada bairro não classificado
+    centroides_sem_distrito <- st_centroid(bairros_sem_distrito)
+    indices_proximos <- st_nearest_feature(centroides_sem_distrito, sp_distritos)
+    
+    # Atribuir distritos aos bairros não classificados
+    distritos_proximos <- sp_distritos$Distrito[indices_proximos]
+    
+    bairros_classificados$Distrito[is.na(bairros_classificados$Distrito)] <- distritos_proximos
+  }
+  
+  bairros_classificados <- bairros_classificados %>% select(-nome_bairr) %>% 
+    rename(geometry_distritos = geometry)
+  
+  return(bairros_classificados)
+}
+
+res_distritos <- classificar_bairros_por_distrito(sp, jv_shp)
+
+dg_bairros_ok %<>% 
+  left_join(res_distritos)
+
+
+
+# dados API
+dados_api <- read.csv('./dengue_1-26.csv')
 
 dados_api %<>% 
   select(SE,nivel,receptivo,Rt,p_inc100k, tempmin) %>% 
@@ -121,28 +263,171 @@ dados_api %<>%
   filter(ano %in% c(ano_atual-1,ano_atual))
 
 
-# incidencia
-dados_api %>% 
-  filter(SE <= weeks_2_plot[3]) %>% 
-  ggplot() +
-  geom_line(aes(x = factor(SE), y = p_inc100k, group = 1)) +
-   geom_segment(
-    aes(x = factor(SE), xend = factor(SE),y = 0,yend = p_inc100k,
-      color = factor(nivel)),linewidth = 0.7) +
-   scale_color_manual(name = "",
-    values = c("1" = "green3", "2" = "yellow3", "3" = "orange3", "4" = "red3"),
-    guide = guide_legend(override.aes = list(linewidth = 4))) +
-  scale_x_discrete(breaks = levels(factor(dados_api$SE))[seq(1,nlevels(factor(dados_api$SE)), by = 8)]) +
-  labs(x = "Semanas Epidemiológicas" , y = "Casos por 100k pessoas",
-       title = paste0("Curva de incidência Joinville"," ",weeks_2_plot[3])) +
-  theme_minimal()+
-  theme(legend.position = "top") -> m_inc
+
+
+```
+
+```{r}
+# funções
+
+generate_maps <- function(data, df_bruto,df_ok, weeks_2_plot, lim1 = NULL, lim2 = NULL) {
   
+  if (is.null(lim1)) {
+    lim1 <- data %>%
+      filter(SEM_NOT %in% weeks_2_plot) %>%
+      pull(inc) %>% min()
+  }
+  
+  if (is.null(lim2)) {
+    lim2 <- data %>%
+      filter(SEM_NOT %in% weeks_2_plot) %>%
+      pull(inc) %>% max()
+  }
+  
+  plots_list <- list()
+  
+  for (week_label in weeks_2_plot) {
+    week_data <- data %>% filter(SEM_NOT == week_label)
+    
+ percent_na <- 100 - (bairros_parecidos %>%
+                           filter(SEM_NOT == week_label) %>%
+                           nrow() / dg2025 %>%
+                           filter(SEM_NOT == week_label) %>%
+                           nrow() * 100)
+    
+    plot <- ggplot(data = week_data) +
+      geom_sf(aes(fill = inc, geometry = geometry)) +
+      scale_fill_distiller(palette = "YlOrRd", direction = 1,
+                           limits = c(lim1, lim2)) +
+      ggpubr::theme_pubclean(base_size = 10) +
+      theme(axis.text = element_blank(),
+            axis.ticks = element_blank()) +
+      labs(title = paste("Semana de Notificação:", week_label),
+           subtitle = paste("Porcentagem de 'Não alocado':", round(percent_na, 2), "%"))
+    
+    plots_list[[as.character(week_label)]] <- plot
+  }
+  
+  return(plots_list)
+}
+
+```
+
+
+# Município
+
+## Curva de incidência com nowcast
+
+```{r include=FALSE, cache = TRUE}
+# Gerar o nowcasting
+  df_nowcast <- nowcasting_inla(
+    dataset = nowcastdg,
+    data.by.week = TRUE,
+    date_onset = dt_sin_pri,
+    date_report = dt_digita,
+    K = 1
+  )
+  
+  # Processar os dados do nowcasting
+df_nowcast$total  <- df_nowcast$total %>%
+  mutate(
+    ano = year(dt_event),
+    epiweek = lubridate::epiweek(dt_event),
+    ano_epi = case_when(
+      epiweek == 1 & lag(epiweek, default = 52) == 52 ~ paste0(year(dt_event)+1, str_pad(epiweek, width = 2, pad = "0")),
+      TRUE ~ paste0(year(dt_event), str_pad(epiweek, width = 2, pad = "0"))
+    ),
+    type = case_when(
+      ano_epi > as.numeric(as.character(weeks_2_plot[3])) ~ 'Forecasting',
+      T ~ "Nowcasting"
+    )
+  ) 
+  
+  # Preparar dados observados
+dados_by_week <- nowcastdg %>%  
+  mutate(
+    dt_event = dt_sin_pri,
+    epiweek = epiweek(dt_event),
+    ano = year(dt_event),
+    ano_epi = paste0(ano, str_pad(epiweek, width = 2, pad = "0"))
+  ) %>%
+  count(ano_epi, dt_event, name = "total_Y") %>% 
+  filter(total_Y != 0 & ano_epi >= paste0(ano_atual-1,"01")) %>% 
+  group_by(ano_epi) %>% 
+  summarise(
+    total_Y = sum(total_Y)
+  ) %>% 
+  left_join(
+    dados_api %>% 
+      mutate(SE = as.character(SE)) %>%  # Converte para texto se necessário
+      select(SE, nivel), 
+    by = c("ano_epi" = "SE")  # Junta ano_epi (chr) com SE (convertido para chr)
+  )
+  
+ m_inc <- ggplot() +
+  # Segmentos (barras verticais)
+  geom_segment(
+    data = dados_by_week,
+    aes(x = factor(ano_epi), xend = factor(ano_epi), y = 0, yend = total_Y, color = factor(nivel)),
+    linewidth = 0.7
+  ) +
+  # Linha observada
+  geom_line(
+    data = dados_by_week,
+    aes(x = factor(ano_epi), y = total_Y, group = 1),
+    color = "black",
+    linewidth = 1
+  ) +
+  # Nowcasting (apenas)
+  geom_line(
+    data = df_nowcast$total %>% filter(type == "Nowcasting"),
+    aes(x = factor(ano_epi), y = Median, color = "Nowcasting", group = type),
+    linewidth = 0.5, linetype = 2
+  ) +
+  # Ribbon (apenas nowcasting)
+  geom_ribbon(
+    data = df_nowcast$total %>% filter(type == "Nowcasting"),
+    aes(x = factor(ano_epi), ymin = LI, ymax = LS, fill = "Nowcasting", group = type),
+    alpha = 0.2
+  ) +
+  # Escalas de cor
+  scale_color_manual(
+    name = NULL,
+    values = c("Nowcasting" = "blue", "1" = "green", "2" = "yellow", "3" = "orange", "4" = "red"),
+    labels = c("Nowcasting" = "Nowscating", "1" = "Baixo Risco", "2" = "Atenção", "3" = "Risco Moderado", "4" = "Risco alto"),
+    breaks = c("Nowcasting", "1", "2", "3", "4")  # Itens da legenda na ordem desejada
+  ) +
+  scale_fill_manual(
+    values = c("Nowcasting" = "blue"),
+    guide = "none"  # Remove a legenda do fill
+  ) +
+  theme_bw() +
+  theme(
+    legend.position = "top",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  ) + 
+  scale_x_discrete(
+    breaks = levels(factor(dados_by_week$ano_epi))[seq(1, nlevels(factor(dados_by_week$ano_epi)), by = 8)]
+  )  + 
+   labs( x = "Semanas Epidemiológicas", 
+         y = "Casos notificados",
+         title = paste0("Curva de incidência -", " ", "Joinville"," ", "até SE", weeks_2_plot[3]))
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ print(m_inc)
+```
+
+## Receptividade climática
+
+```{r echo=FALSE}
+
 # receptividade e temperatura
 scale_factor <- max(dados_api$receptivo, na.rm = TRUE) / max(dados_api$tempmin, na.rm = TRUE)
 
 dados_api %>% 
-  filter(SE <= weeks_2_plot[3]) %>% 
+  filter(SE <= as.numeric(as.character(weeks_2_plot[3]))) %>% 
   ggplot() +
   geom_rect(
     aes(xmin = -Inf, xmax = Inf, ymin = 0, ymax = 1),
@@ -152,7 +437,9 @@ dados_api %>%
   geom_hline(aes(yintercept = 18*scale_factor, color = "Limiar Favorável"), 
              linewidth = 1, linetype = "dashed") +
   scale_x_discrete(
-    breaks = levels(factor(dados_api$SE))[seq(1, nlevels(factor(dados_api$SE)), by = 8)]
+    breaks = levels(factor(dados_api$SE))[seq(1, 
+                                              
+                                              nlevels(factor(dados_api$SE)), by = 8)]
   ) +
   scale_y_continuous(
     name = "Receptividade climática",
@@ -165,37 +452,850 @@ dados_api %>%
     axis.text.y.right = element_text(color = "black"),
     axis.title.y.left = element_text(color = "black")
   ) +
-  theme(legend.position = "top") -> m_rec
+  theme(
+    legend.position = "top",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  ) -> m_rec
 
+```
 
+```{r message=FALSE, warning=FALSE}
+print(m_rec)
+```
 
+## Rt
+
+```{r  echo=FALSE, message=FALSE, warning=FALSE,  include=FALSE}
 # Rt
 dados_api %>% 
-  filter(SE <= weeks_2_plot[3]) %>% 
+  filter(SE <= as.numeric(as.character(weeks_2_plot[3]))) %>% 
   ggplot() +
   geom_line(aes(x = factor(SE), y = Rt, group =1)) +
   geom_hline(yintercept =  1 , linetype = 2, col = "red") +
   scale_x_discrete(
     breaks = levels(factor(dados_api$SE))[seq(1, nlevels(factor(dados_api$SE)), by = 8)]) +
-   labs(x = "Semanas Epidemiológicas" , y = "Casos por 100k pessoas",
+   labs(x = "Semanas Epidemiológicas" , y = "Casos notificados",
        title = paste0("Curva de Rt Joinville"," ","até"," ",weeks_2_plot[3])) +
   theme_minimal() +
-  theme(legend.position = "top") -> m_rt
+  theme(
+    legend.position = "top",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  ) -> m_rt
 
 ```
 
 
-```{r echo=FALSE}
-print(m_inc)
-```
-
-```{r warning=FALSE}
-print(m_rec)
-```
-
-
-```{r}
+```{r message=FALSE, warning=FALSE}
 print(m_rt)
 ```
+
+## Mapa de 3 últimas semanas
+
+```{r}
+
+plots_mun <- generate_maps(data = dados_api %>% 
+                             rename(inc = p_inc100k) %>%
+                             rename(SEM_NOT = SE) %>% 
+                             mutate(geometry = city$geom ),
+                           bairros_parecidos,dg2025,weeks_2_plot)
+
+## Adicionar legenda aos gráficos
+legend_m <- plots_mun[[length(plots_mun) - 2]] + theme(legend.position = "top") + 
+  labs(fill = "Incidência (100.000 pessoas)")
+grob_p_m <- ggplotGrob(legend_m)
+legend_m <- gtable::gtable_filter(grob_p_m, "guide-box")
+
+## Gerar painel com os gráficos de RA
+ggdraw() +
+  draw_plot(plots_mun[[length(plots_mun) - 2]] + theme(legend.position = "none"),x = 0.08, y = 0.1, width = 0.3) +
+  draw_plot(plots_mun[[length(plots_mun) - 1]] + theme(legend.position = "none"),x = 0.65, y = 0.1, width = 0.3) +
+  draw_plot(plots_mun[[length(plots_mun)]]  + theme(legend.position = "none"),x = 0.4, y = -0.3, width = 0.3) +
+  draw_grob(legend_m, x = -0.02, y = -0.05) -> municipio_incidence_3epiweeks
+
+```
+
+```{r fig.height=5, fig.width=8}
+print(municipio_incidence_3epiweeks)
+```
+
+# Distritos
+
+```{r Mapa distritos, message=FALSE, warning=FALSE, cache=TRUE}
+dg_distritos <- dg_bairros_ok %>%
+  group_by(SEM_NOT, Distrito) %>%                
+  summarise(
+    pop_total = sum(pop, na.rm = TRUE), 
+    not_total = sum(notificações, na.rm = TRUE), 
+    geometry = st_union(geometry_distritos)  # Funde geometrias
+  ) %>% 
+  mutate(inc = not_total/pop_total*1e5,
+         ano = substr(SEM_NOT,1,4)) %>% 
+  ungroup() %>% 
+    filter(ano %in% c(ano_atual-1, ano_atual))
+
+
+dg_distritos_wgs84 <- st_as_sf(dg_distritos)
+dg_distritos_wgs84 <- st_transform(dg_distritos_wgs84, crs = 4326)
+
+if(F){
+distros.m <- ggplot() +
+geom_sf(data = city, 
+          aes(geometry = geom, fill = "Região Rural"),color = "black") +
+  geom_sf_pattern(data = dg_distritos_wgs84 %>% filter(SEM_NOT == weeks_2_plot[1]),
+                  aes(geometry = geometry, pattern = Distrito),
+                  pattern_fill = "white",
+                  pattern_color = "black",
+                  pattern_size = 0.5,
+                  pattern_spacing = 0.01,
+                  fill = "white",
+                  color = "black") + 
+  ggpubr::theme_pubclean(base_size = 10) +
+  theme(axis.text = element_blank(),
+        axis.ticks = element_blank()) +
+  scale_pattern_manual(values = c("stripe", "crosshatch", "circle"), name = "" )+
+  scale_fill_manual(name = "",
+                    values = c("Região Rural" = "grey"))
+}
+
+distros.m <- ggplot() +
+ geom_sf(data = city, 
+         aes(geometry = geom, fill = "Região Rural"),
+         color = "black") +
+ geom_sf(data = dg_distritos_wgs84 %>% filter(SEM_NOT == weeks_2_plot[1]),
+         aes(geometry = geometry, fill = Distrito),
+         color = "black", linewidth = 0.5) + 
+ ggpubr::theme_pubclean(base_size = 10) +
+ theme(axis.text = element_blank(),
+       axis.ticks = element_blank()) + 
+ scale_fill_manual(name = "",
+                   values = c("Região Rural" = "white",
+                              "Distrito Centro" = "grey20",
+                              "Distrito Norte" = "grey50", 
+                              "Distrito Sul" = "grey70"))
+
+print(distros.m)
+  
+
+```
+
+## Curva de incidência com nowcast
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+
+dg_distritos %>% select(!c(geometry,inc,ano)) %>% 
+  left_join(dados_api %>% ungroup() %>% mutate(SE = as.character(SE)) %>% select(SE, tempmin) %>% 
+              rename(temp_min = tempmin),
+            by = c("SEM_NOT" = "SE")) -> dg_distritos_nivel
+
+bd <- dg_distritos_nivel %>%
+  mutate(id_distrito = case_when(
+    Distrito == "Distrito Norte" ~1,
+    Distrito == "Distrito Sul" ~2,
+    Distrito == "Distrito Centro"~3
+  ))%>% 
+  select(SEM_NOT,Distrito,id_distrito,temp_min,not_total,pop_total) %>% 
+  mutate(SE = as.numeric(SEM_NOT),
+         ano = as.numeric(ano))  %>%# o correto seria usar a SEM_INI
+  rename(casos = not_total) %>%
+  mutate(inc = casos/pop_total*100000) %>% 
+  as.data.frame()
+
+# rodando alerta por bairro
+ids <- unique(bd$id_distrito)
+
+# dataframe para os resultados
+resultado <- data.frame()
+  
+# calculando alerta por bairro
+for(i in 1:length(ids)){
+   
+   nome <- unique(bd$Distrito)[i]
+   bdi <- bd %>%
+    filter(id_distrito == ids[i])  %>%  
+    arrange(SE)  %>%   # garantir que está em ordem cronologica
+    Rt(count = "casos", 
+        gtdist = "normal", meangt = 3, sdgt = 1) 
+  
+   # build rules
+   crit.x <- params # parameters
+   crit.x.vector <- structure(as.character(crit.x), names = as.character(names(crit.x))) # dataframe -> vector
+   criteriaU <- setCriteria(rule = crit.x$codmodelo, values = crit.x.vector) # valued criteria
+   
+   # Apply alert rules
+   y <- fouralert(bdi, crit = criteriaU)  # apply alert 
+  
+  bdi$nivel <- y$indices$level
+  bdi$receptivo <- y$indices$cytrue
+
+  resultado <- rbind(resultado,bdi)
+  rm(bdi)
+  
+}
+
+```
+
+
+```{r Nowcast distritos, eval=FALSE, cache=TRUE, include=FALSE}
+
+## adaptar esse!
+
+distrito_nowcast %>% left_join(dg_bairros_ok %>%
+                                 select(NM_BAIRRO_REF,Distrito) %>% distinct, by = c("NM_BAIRRO_REF")) %>% 
+  mutate(distrito_num = case_when(
+    Distrito == "Distrito Norte" ~ 1,
+    Distrito == "Distrito Sul" ~ 2,
+    TRUE ~ 3
+  )) %>% 
+  select(DT_SIN_PRI,DT_DIGITA,Distrito,distrito_num) %>% 
+  filter(year(DT_SIN_PRI) %in% c(ano_atual-2, ano_atual-1,ano_atual)) %>% 
+  rename_with(tolower) -> nowcastDdg
+
+#objeto com o nome de cada RS  
+unique_DT <- unique(nowcastDdg$distrito)
+
+# Função para rodar nowcasting em cada RS 
+generate_plot <- function(DT_value) {
+  # Filtrar os dados para a RS específica
+  filtered_data <- nowcastDdg %>% filter(distrito == DT_value)
+  
+  # Gerar o nowcasting
+  df_nowcast <- nowcasting_inla(
+    dataset = filtered_data,
+    data.by.week = TRUE,
+    date_onset = dt_sin_pri,
+    date_report = dt_digita,
+    K = 0
+  )
+  
+  df_nowcast$total %>%
+    mutate(ano = year(dt_event)) %>%
+    mutate(epiweek = lubridate::epiweek(dt_event)) %>%
+    mutate(ano_epi = case_when(
+      epiweek == 1 & lag(epiweek, default = 52) == 52 ~ paste0(ano_atual, str_pad(epiweek, width = 2, side = "left", pad = "0")),
+      TRUE ~ paste0(ano, str_pad(epiweek, width = 2, side = "left", pad = "0")) 
+    )) -> df_nowcast$total
+  
+  
+  df_nowcast$total <- df_nowcast$total %>% 
+    mutate(type = case_when(
+      ano_epi > as.numeric(as.character(weeks_2_plot[3])) ~ "Forecast",
+      TRUE ~ "Nowcasting"
+    ))
+  
+  
+  # Ajustando os dados para o gráfico (sem o filtro de -270 dias)
+  dados_by_week <- df_nowcast$data %>%  
+    ungroup() %>%  
+    select(dt_event, Y) %>%  
+    group_by(dt_event) %>%  
+    summarize(total_Y = sum(Y, na.rm = TRUE), .groups = "drop") %>% 
+    mutate(epiweek = epiweek(dt_event)) %>% 
+    filter(epiweek <= 52 & total_Y != 0) %>% 
+    mutate(ano = year(dt_event),
+           ano = if_else(lag(epiweek, default = 1) == 52 & epiweek == 1, ano + 1, ano),
+           ano_epi = paste0(ano, str_pad(epiweek, width = 2, side = "left", pad = "0")))
+  
+  
+  # Criar o gráfico
+  plot <- ggplot() +
+    # Linha dos dados observados
+    geom_line(
+      data = dados_by_week,
+      aes(x = factor(ano_epi), y = total_Y, col = "Observed", group = 1)
+    ) +
+    # Linha do nowcasting
+    geom_line(
+      data = df_nowcast$total,
+      aes(x = factor(ano_epi), y = Median, col = type, group = type)
+    ) +
+    # Faixa de confiança do nowcasting
+    geom_ribbon(
+      data = df_nowcast$total,
+      aes(x = factor(ano_epi), ymin = LI, ymax = LS, col = type, fill = type, group = type),
+      alpha = 0.2, show.legend = FALSE
+    ) +
+    # Estilo do tema
+    theme_bw(base_size = 10) +
+    theme(
+      legend.position = "bottom",
+      axis.text.x = element_text(angle = 45, hjust = 1)
+    ) +
+    # Escala de cores e preenchimentos
+    scale_color_manual(
+      values = c('green4', "black"),
+      name = ''
+    ) +
+    scale_fill_manual(
+      values = c('green4', 'green4'),
+      name = ''
+    ) +
+    # Rótulos do gráfico
+    labs(
+      x = 'Semana epidemiológica',
+      y = 'Nº de Casos',
+      title = paste("Distrito -", DT_value)
+    )+
+    scale_x_discrete(
+    breaks = levels(factor(dados_by_week$ano_epi))[seq(1, nlevels(factor(dados_by_week$ano_epi)), by = 8)]
+  ) +
+    ylim(0, 1300) +
+  
+  # Adicionar subtítulo condicional
+  if (DT_value == "Não alocado") {
+    plot <- plot + labs(subtitle = paste(round(missing_info,2),"% casos não alocados em nenhuma RS"))
+  }
+  
+  return(plot)
+}
+
+nowcast_distrito <- map(unique_DT, ~ generate_plot(.x))
+
+```
+
+
+```{r Nowcast distrito gambiarra, message=FALSE, warning=FALSE, include=FALSE, cache = T}
+## níveis de incidencia por distrito
+
+distrito_nowcast %>% left_join(dg_bairros_ok %>%
+                                 select(NM_BAIRRO_REF,Distrito) %>% 
+                                 distinct, by = c("NM_BAIRRO_REF")) %>% 
+  mutate(distrito_num = case_when(
+    Distrito == "Distrito Norte" ~ 1,
+    Distrito == "Distrito Sul" ~ 2,
+    TRUE ~ 3
+  )) %>% 
+  select(DT_SIN_PRI,DT_DIGITA,Distrito,distrito_num) %>% 
+  filter(year(DT_SIN_PRI) %in% c(ano_atual-2, ano_atual-1,ano_atual)) %>% 
+  rename_with(tolower) -> nowcastDdg
+
+# norte
+
+nowcastDdg %>%
+  filter(distrito == "Distrito Norte") -> nowcastDdg_norte
+  
+  # Gerar o nowcasting
+  df_nowcast_norte <- nowcasting_inla(
+    dataset = nowcastDdg_norte,
+    data.by.week = TRUE,
+    date_onset = dt_sin_pri,
+    date_report = dt_digita,
+    K = 1
+  )
+  
+  df_nowcast_norte$total %>%
+    mutate(ano = year(dt_event)) %>%
+    mutate(epiweek = lubridate::epiweek(dt_event)) %>%
+    mutate(ano_epi = case_when(
+      epiweek == 1 & lag(epiweek, default = 52) == 52 ~ paste0(ano_atual, str_pad(epiweek, width = 2, side = "left", pad = "0")),
+      TRUE ~ paste0(ano, str_pad(epiweek, width = 2, side = "left", pad = "0")) 
+    )) -> df_nowcast_norte$total
+  
+  df_nowcast_norte$total <- df_nowcast_norte$total %>% 
+    mutate(type = case_when(
+      ano_epi > as.numeric(as.character(weeks_2_plot[3])) ~ "Forecast",
+      TRUE ~ "Nowcasting"
+    ))
+  
+  dados_by_week_norte <- nowcastDdg_norte %>%  
+    mutate(
+      dt_event = dt_sin_pri,
+      epiweek = epiweek(dt_event),
+      ano = year(dt_event),
+      ano_epi = paste0(ano, str_pad(epiweek, width = 2, pad = "0"))
+    ) %>%
+    count(ano_epi, dt_event, name = "total_Y") %>% 
+    filter(total_Y != 0 & ano_epi >= paste0(ano_atual-1,"01")) %>% 
+    group_by(ano_epi) %>% 
+    summarise(
+      total_Y = sum(total_Y)
+    ) %>% 
+    left_join(
+      resultado %>% filter(Distrito == "Distrito Norte") %>% 
+        mutate(SE = as.character(SE)) %>%  # Converte para texto se necessário
+        select(SE, nivel), 
+      by = c("ano_epi" = "SE")  # Junta ano_epi (chr) com SE (convertido para chr)
+    )
+  
+
+d_norte_inc <- ggplot() +
+    # Segmentos (barras verticais)
+    geom_segment(
+      data = dados_by_week_norte,
+      aes(x = factor(ano_epi), xend = factor(ano_epi), y = 0, yend = total_Y, color = factor(nivel)),
+      linewidth = 0.7
+    ) +
+    # Linha observada
+    geom_line(
+      data = dados_by_week_norte,
+      aes(x = factor(ano_epi), y = total_Y, group = 1),
+      color = "black",
+      linewidth = 1
+    ) +
+    # Nowcasting (apenas)
+    geom_line(
+      data = df_nowcast_norte$total %>% filter(type == "Nowcasting"),
+      aes(x = factor(ano_epi), y = Median, color = "Nowcasting", group = type),
+      linewidth = 0.5, linetype = 2
+    ) +
+    # Ribbon (apenas nowcasting)
+    geom_ribbon(
+      data = df_nowcast_norte$total %>% filter(type == "Nowcasting"),
+      aes(x = factor(ano_epi), ymin = LI, ymax = LS, fill = "Nowcasting", group = type),
+      alpha = 0.2
+    ) +
+    # Escalas de cor
+    scale_color_manual(
+      name = NULL,
+      values = c("Nowcasting" = "blue", "1" = "green", "2" = "yellow", "3" = "orange", "4" = "red"),
+      labels = c("Nowcasting" = "Nowscating", "1" = "Baixo Risco", "2" = "Atenção", "3" = "Risco Moderado", "4" = "Risco alto"),
+      breaks = c("Nowcasting", "1", "2", "3", "4")  # Itens da legenda na ordem desejada
+    ) +
+    scale_fill_manual(
+      values = c("Nowcasting" = "blue"),
+      guide = "none"  # Remove a legenda do fill
+    ) +
+    theme_bw() +
+    theme(
+      legend.position = "top",
+      axis.text.x = element_text(angle = 45, hjust = 1)
+    ) + 
+    scale_x_discrete(
+      breaks = levels(factor(dados_by_week_norte$ano_epi))[seq(1, nlevels(factor(dados_by_week_norte$ano_epi)), by = 8)]
+    )  + 
+    labs( x = "Semanas Epidemiológicas", 
+          y = "Casos notificados",
+          title = paste0("Curva de incidência -", " ", "Distrito Norte"," ", "até SE", weeks_2_plot[3])) +
+  ylim(0,2600)
+  
+
+
+# sul
+
+nowcastDdg %>%
+  filter(distrito == "Distrito Sul") -> nowcastDdg_sul
+
+# Gerar o nowcasting
+df_nowcast_sul <- nowcasting_inla(
+  dataset = nowcastDdg_sul,
+  data.by.week = TRUE,
+  date_onset = dt_sin_pri,
+  date_report = dt_digita,
+  K = 1
+)
+
+df_nowcast_sul$total %>%
+  mutate(ano = year(dt_event)) %>%
+  mutate(epiweek = lubridate::epiweek(dt_event)) %>%
+  mutate(ano_epi = case_when(
+    epiweek == 1 & lag(epiweek, default = 52) == 52 ~ paste0(ano_atual, str_pad(epiweek, width = 2, side = "left", pad = "0")),
+    TRUE ~ paste0(ano, str_pad(epiweek, width = 2, side = "left", pad = "0")) 
+  )) -> df_nowcast_sul$total
+
+
+df_nowcast_sul$total <- df_nowcast_sul$total %>% 
+  mutate(type = case_when(
+    ano_epi > as.numeric(as.character(weeks_2_plot[3])) ~ "Forecast",
+    TRUE ~ "Nowcasting"
+  ))
+
+
+dados_by_week_sul <- nowcastDdg_sul %>%  
+  mutate(
+    dt_event = dt_sin_pri,
+    epiweek = epiweek(dt_event),
+    ano = year(dt_event),
+    ano_epi = paste0(ano, str_pad(epiweek, width = 2, pad = "0"))
+  ) %>%
+  count(ano_epi, dt_event, name = "total_Y") %>% 
+  filter(total_Y != 0 & ano_epi >= paste0(ano_atual-1,"01")) %>% 
+  group_by(ano_epi) %>% 
+  summarise(
+    total_Y = sum(total_Y)
+  ) %>% 
+  left_join(
+    resultado %>% filter(Distrito == "Distrito Sul") %>% 
+      mutate(SE = as.character(SE)) %>%  # Converte para texto se necessário
+      select(SE, nivel), 
+    by = c("ano_epi" = "SE")  # Junta ano_epi (chr) com SE (convertido para chr)
+  )
+
+
+d_sul_inc <- ggplot() +
+  # Segmentos (barras verticais)
+  geom_segment(
+    data = dados_by_week_sul,
+    aes(x = factor(ano_epi), xend = factor(ano_epi), y = 0, yend = total_Y, color = factor(nivel)),
+    linewidth = 0.7
+  ) +
+  # Linha observada
+  geom_line(
+    data = dados_by_week_sul,
+    aes(x = factor(ano_epi), y = total_Y, group = 1),
+    color = "black",
+    linewidth = 1
+  ) +
+  # Nowcasting (apenas)
+  geom_line(
+    data = df_nowcast_sul$total %>% filter(type == "Nowcasting"),
+    aes(x = factor(ano_epi), y = Median, color = "Nowcasting", group = type),
+    linewidth = 0.5, linetype = 2
+  ) +
+  # Ribbon (apenas nowcasting)
+  geom_ribbon(
+    data = df_nowcast_sul$total %>% filter(type == "Nowcasting"),
+    aes(x = factor(ano_epi), ymin = LI, ymax = LS, fill = "Nowcasting", group = type),
+    alpha = 0.2
+  ) +
+  # Escalas de cor
+  scale_color_manual(
+    name = NULL,
+    values = c("Nowcasting" = "blue", "1" = "green", "2" = "yellow", "3" = "orange", "4" = "red"),
+    labels = c("Nowcasting" = "Nowscating", "1" = "Baixo Risco", "2" = "Atenção", "3" = "Risco Moderado", "4" = "Risco alto"),
+    breaks = c("Nowcasting", "1", "2", "3", "4")  # Itens da legenda na ordem desejada
+  ) +
+  scale_fill_manual(
+    values = c("Nowcasting" = "blue"),
+    guide = "none"  # Remove a legenda do fill
+  ) +
+  theme_bw() +
+  theme(
+    legend.position = "top",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  ) + 
+  scale_x_discrete(
+    breaks = levels(factor(dados_by_week_norte$ano_epi))[seq(1, nlevels(factor(dados_by_week_norte$ano_epi)), by = 8)]
+  )  + 
+  labs( x = "Semanas Epidemiológicas", 
+        y = "Casos notificados",
+        title = paste0("Curva de incidência -", " ", "Distrito Sul"," ", "até SE", weeks_2_plot[3])) +
+  ylim(0, 2600)
+
+
+
+
+# centro
+
+nowcastDdg %>%
+  filter(distrito == "Distrito Centro") -> nowcastDdg_centro
+
+# Gerar o nowcasting
+df_nowcast_centro <- nowcasting_inla(
+  dataset = nowcastDdg_centro,
+  data.by.week = TRUE,
+  date_onset = dt_sin_pri,
+  date_report = dt_digita,
+  K = 1
+)
+
+df_nowcast_centro$total %>%
+  mutate(ano = year(dt_event)) %>%
+  mutate(epiweek = lubridate::epiweek(dt_event)) %>%
+  mutate(ano_epi = case_when(
+    epiweek == 1 & lag(epiweek, default = 52) == 52 ~ paste0(ano_atual, str_pad(epiweek, width = 2, side = "left", pad = "0")),
+    TRUE ~ paste0(ano, str_pad(epiweek, width = 2, side = "left", pad = "0")) 
+  )) -> df_nowcast_centro$total
+
+
+df_nowcast_centro$total <- df_nowcast_centro$total %>% 
+  mutate(type = case_when(
+    ano_epi > as.numeric(as.character(weeks_2_plot[3])) ~ "Forecast",
+    TRUE ~ "Nowcasting"
+  ))
+
+
+dados_by_week_centro <- nowcastDdg_centro %>%  
+  mutate(
+    dt_event = dt_sin_pri,
+    epiweek = epiweek(dt_event),
+    ano = year(dt_event),
+    ano_epi = paste0(ano, str_pad(epiweek, width = 2, pad = "0"))
+  ) %>%
+  count(ano_epi, dt_event, name = "total_Y") %>% 
+  filter(total_Y != 0 & ano_epi >= paste0(ano_atual-1,"01")) %>% 
+  group_by(ano_epi) %>% 
+  summarise(
+    total_Y = sum(total_Y)
+  ) %>% 
+  left_join(
+    resultado %>% filter(Distrito == "Distrito Centro") %>% 
+      mutate(SE = as.character(SE)) %>%  # Converte para texto se necessário
+      select(SE, nivel), 
+    by = c("ano_epi" = "SE")  # Junta ano_epi (chr) com SE (convertido para chr)
+  )
+
+
+d_centro_inc <- ggplot() +
+  # Segmentos (barras verticais)
+  geom_segment(
+    data = dados_by_week_centro,
+    aes(x = factor(ano_epi), xend = factor(ano_epi), y = 0, yend = total_Y, color = factor(nivel)),
+    linewidth = 0.7
+  ) +
+  # Linha observada
+  geom_line(
+    data = dados_by_week_centro,
+    aes(x = factor(ano_epi), y = total_Y, group = 1),
+    color = "black",
+    linewidth = 1
+  ) +
+  # Nowcasting (apenas)
+  geom_line(
+    data = df_nowcast_centro$total %>% filter(type == "Nowcasting"),
+    aes(x = factor(ano_epi), y = Median, color = "Nowcasting", group = type),
+    linewidth = 0.5, linetype = 2
+  ) +
+  # Ribbon (apenas nowcasting)
+  geom_ribbon(
+    data = df_nowcast_centro$total %>% filter(type == "Nowcasting"),
+    aes(x = factor(ano_epi), ymin = LI, ymax = LS, fill = "Nowcasting", group = type),
+    alpha = 0.2
+  ) +
+  # Escalas de cor
+  scale_color_manual(
+    name = NULL,
+    values = c("Nowcasting" = "blue", "1" = "green", "2" = "yellow", "3" = "orange", "4" = "red"),
+    labels = c("Nowcasting" = "Nowscating", "1" = "Baixo Risco", "2" = "Atenção", "3" = "Risco Moderado", "4" = "Risco alto"),
+    breaks = c("Nowcasting", "1", "2", "3", "4")  # Itens da legenda na ordem desejada
+  ) +
+  scale_fill_manual(
+    values = c("Nowcasting" = "blue"),
+    guide = "none"  # Remove a legenda do fill
+  ) +
+  theme_bw() +
+  theme(
+    legend.position = "top",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  ) + 
+  scale_x_discrete(
+    breaks = levels(factor(dados_by_week_norte$ano_epi))[seq(1, nlevels(factor(dados_by_week_norte$ano_epi)), by = 8)]
+  )  + 
+  labs( x = "Semanas Epidemiológicas", 
+        y = "Casos notificados",
+        title = paste0("Curva de incidência -", " ", "Distrito Centro"," ", "até SE", weeks_2_plot[3])) +
+  ylim(0, 2600)
+
+
+```
+
+
+```{r fig.height=10, fig.width=8, message=FALSE, warning=FALSE}
+ggpubr::ggarrange(d_norte_inc,
+                   d_centro_inc,
+                   d_sul_inc,
+                  ncol = 1, nrow = 3, common.legend = T)
+```
+
+
+
+```{r eval=FALSE, include=FALSE}
+## adaptar com o outro!
+ggpubr::ggarrange(nowcast_distrito[[1]],
+                   nowcast_distrito[[2]],
+                   nowcast_distrito[[3]],
+                  ncol = 3, nrow = 1, common.legend = T)
+```
+
+## Rt
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+source("Rt_fun.R")
+
+dg_distritos_norte <- dg_distritos %>% 
+  filter(Distrito == "Distrito Norte") %>% 
+  select(SEM_NOT,not_total) %>% 
+  rename(casos = not_total) %>% 
+  rename(SE = SEM_NOT)
+
+dg_distritos_sul <- dg_distritos %>% 
+  filter(Distrito == "Distrito Sul") %>% 
+  select(SEM_NOT,not_total) %>% 
+  rename(casos = not_total) %>% 
+  rename(SE = SEM_NOT)
+
+dg_distritos_centro <- dg_distritos %>% 
+  filter(Distrito == "Distrito Centro") %>% 
+  select(SEM_NOT,not_total) %>% 
+  rename(casos = not_total) %>% 
+  rename(SE = SEM_NOT)
+
+# norte
+dg_distritos_norte <- Rt(as.data.frame(dg_distritos_norte), count = "casos",gtdist = "normal",meangt = 2,sdgt = 1) %>% 
+  mutate(distrito = "Norte")
+
+# sul
+dg_distritos_sul <- Rt(as.data.frame(dg_distritos_sul), count = "casos",gtdist = "normal",meangt = 2,sdgt = 1) %>% 
+  mutate(distrito = "Sul")
+
+# centro
+dg_distritos_centro <- Rt(as.data.frame(dg_distritos_centro), count = "casos",gtdist = "normal",meangt = 2,sdgt = 1) %>% 
+  mutate(distrito = "Centro")
+
+dg_distritos_rt <- rbind(dg_distritos_norte,dg_distritos_sul,
+                         dg_distritos_centro)
+
+d_Rt <- ggplot(dg_distritos_rt) +
+  geom_line(aes(x=SE,y=Rt, group = 1)) +
+  geom_hline(yintercept =  1 , linetype = 2, col = "red") +
+ facet_wrap(~distrito,  labeller = labeller(distrito = function(x) paste("Distrito", x)))  + 
+   scale_x_discrete(
+    breaks = levels(factor(dg_distritos_rt$SE))[seq(1, nlevels(factor(dg_distritos_rt$SE)), by = 10)])+
+  labs(x = "Semanas Epidemiológicas" , y = "Casos notificados",
+       title = paste0("Curva de Rt por distritos"," ","até"," ",weeks_2_plot[3]))+
+  theme_minimal()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+```{r message=FALSE, warning=FALSE}
+print(d_Rt)
+```
+
+
+## Mapa de 3 últimas semanas
+
+```{r Mapa incidencia distrito, fig.height=15, fig.width=10}
+
+## Gerar mapas de incidência para RA
+plots_distrito <- generate_maps(dg_distritos,bairros_parecidos,dg2025,weeks_2_plot)
+
+## Adicionar legenda aos gráficos
+legend <- plots_distrito[[length(plots_distrito) - 2]] + theme(legend.position = "top") + 
+  labs(fill = "Incidência (100.000 pessoas)")
+grob_p <- ggplotGrob(legend)
+legend <- gtable::gtable_filter(grob_p, "guide-box")
+
+## Gerar painel com os gráficos de RA
+ggdraw() +
+  draw_plot(plots_distrito[[length(plots_distrito) - 2]] + theme(legend.position = "none"),x = 0.08, y = 0.2, width = 0.3) +
+  draw_plot(plots_distrito[[length(plots_distrito) - 1]] + theme(legend.position = "none"),x = 0.65, y = 0.2, width = 0.3) +
+  draw_plot(plots_distrito[[length(plots_distrito)]]  + theme(legend.position = "none"),x = 0.4, y = -0.1, width = 0.3) +
+  draw_grob(legend, x = -0.02, y = -0.05) -> distrito_incidence_3epiweeks
+
+print(distrito_incidence_3epiweeks)
+
+```
+
+
+# Bairros 
+
+## Curvas de incidências
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+dg_bairros_ok %>% select(!c(geometry_distritos,ano)) %>% 
+  left_join(cli %>% ungroup() %>% mutate(SE = as.character(SE)) %>% 
+              select(-geocodigo),
+            by = c("SEM_NOT" = "SE")) %>% 
+  filter(NM_BAIRRO_REF %in% c("ADHEMAR GARCIA","AMERICA")) -> dg_bairros_nivel
+
+bd2 <- dg_bairros_nivel %>% 
+  select(SEM_NOT,NM_BAIRRO_REF,id_bairro,temp_min,notificações,pop) %>% 
+  mutate(SE = as.numeric(SEM_NOT),
+         ano = as.numeric(ano))  %>%# o correto seria usar a SEM_INI
+  rename(casos = notificações) %>%
+  mutate(inc = casos/pop*100000) %>% 
+  as.data.frame()
+
+# rodando alerta por bairro
+ids2 <- unique(bd2$id_bairro)
+
+# dataframe para os resultados
+resultado2 <- data.frame()
+
+# calculando alerta por bairro
+for(i in 1:length(ids2)){
+  
+  nome <- unique(bd2$NM_BAIRRO_REF)[i]
+  bdi <- bd2 %>%
+    filter(id_bairro == ids2[i])  %>%  
+    arrange(SE)  %>%   # garantir que está em ordem cronologica
+    Rt(count = "casos", 
+       gtdist = "normal", meangt = 3, sdgt = 1) 
+  
+  # build rules
+  crit.x <- params # parameters
+  crit.x.vector <- structure(as.character(crit.x), names = as.character(names(crit.x))) # dataframe -> vector
+  criteriaU <- setCriteria(rule = crit.x$codmodelo, values = crit.x.vector) # valued criteria
+  
+  # Apply alert rules
+  y <- fouralert(bdi, crit = criteriaU)  # apply alert 
+  
+  bdi$nivel <- y$indices$level
+  bdi$receptivo <- y$indices$cytrue
+  
+  resultado2 <- rbind(resultado2,bdi)
+  rm(bdi)
+  
+}
+
+
+b_inc <- ggplot(data = resultado2 %>%
+                  filter(substr(SEM_NOT,1,4) %in% c(ano_atual-1,ano_atual))) +
+  # Segmentos (barras verticais)
+  geom_segment(
+    aes(x = factor(SEM_NOT), xend = factor(SEM_NOT), y = 0, yend = casos, color = factor(nivel)),
+    linewidth = 0.7
+  ) +
+  # Linha observada
+  geom_line(
+    aes(x = factor(SEM_NOT), y = casos, group = 1),
+    color = "black",
+    linewidth = 1
+  )  +
+  # Escalas de cor
+  scale_color_manual(
+    name = NULL,
+    values = c( "1" = "green", "2" = "yellow", "3" = "orange", "4" = "red"),
+    labels = c("Nowcasting" = "Nowscating", "1" = "Baixo Risco", "2" = "Atenção", "3" = "Risco Moderado", "4" = "Risco alto"),
+    breaks = c("Nowcasting", "1", "2", "3", "4")  # Itens da legenda na ordem desejada
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "top",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  ) + 
+  scale_x_discrete(
+    breaks = levels(factor(resultado2$SEM_NOT))[seq(1, nlevels(factor(resultado2$SEM_NOT)), by = 8)]
+  )  + 
+  labs( x = "Semanas Epidemiológicas", 
+        y = "Casos notificados",
+        title = paste0("Curva de incidência por bairro", " ", "até SE", weeks_2_plot[3])) +
+ facet_wrap(~NM_BAIRRO_REF,  labeller = labeller(NM_BAIRRO_REF = function(x) paste("Bairro -", x)))
+
+```
+
+```{r fig.height=6, fig.width=8}
+print(b_inc)
+```
+
+
+## Mapa de 3 últimas semanas
+
+```{r}
+
+## Gerar mapas de incidência para RA
+dg_bairros_ok <- dg_bairros_ok %>% 
+  mutate(inc = notificações/pop*1e5)
+
+plots_bairro <- generate_maps(dg_bairros_ok,bairros_parecidos,dg2025,weeks_2_plot)
+
+## Adicionar legenda aos gráficos
+legend_b <- plots_bairro[[length(plots_bairro) - 2]] + theme(legend.position = "top") + 
+  labs(fill = "Incidência (100.000 pessoas)")
+grob_p_b <- ggplotGrob(legend_b)
+legend_b <- gtable::gtable_filter(grob_p_b, "guide-box")
+
+## Gerar painel com os gráficos de RA
+ggdraw() +
+  draw_plot(plots_bairro[[length(plots_bairro) - 2]] + theme(legend.position = "none"),x = 0.08, y = 0.2, width = 0.3) +
+  draw_plot(plots_bairro[[length(plots_bairro) - 1]] + theme(legend.position = "none"),x = 0.65, y = 0.2, width = 0.3) +
+  draw_plot(plots_bairro[[length(plots_bairro)]]  + theme(legend.position = "none"),x = 0.4, y = -0.1, width = 0.3) +
+  draw_grob(legend_b, x = -0.02, y = -0.05) -> bairro_incidence_3epiweeks
+
+```
+
+```{r fig.height=15, fig.width=10}
+print(bairro_incidence_3epiweeks)
+```
+
 
 
