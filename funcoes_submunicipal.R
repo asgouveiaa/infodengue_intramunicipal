@@ -14,40 +14,64 @@ ler_dados_dengue <- function(caminho) {
   foreign::read.dbf(caminho) %>%
     filter(ID_MUNICIP == "420910", ID_MN_RESI == "420910") %>%  # Joinville
     select(NU_NOTIFIC, NU_ANO, SEM_NOT, SG_UF_NOT, ID_UNIDADE,
-           ID_BAIRRO, NM_BAIRRO, ID_RG_RESI, ID_MN_RESI, CLASSI_FIN,
+           ID_BAIRRO, NM_BAIRRO, ID_MN_RESI, CLASSI_FIN,
            DT_SIN_PRI, DT_DIGITA)
 }
 
 # Função para completar dados (bairros x semanas)
-completar_dados_bairros <- function(dados_bairros, bairros_unicos) {
-  dados_bairros %>%
-    group_by(ano = substr(SEM_NOT, 1, 4)) %>%
-    group_modify(~ {
-      semanas_ano <- as.numeric(substr(.x$SEM_NOT, 5, 6))
-      total_SE <- ifelse(length(semanas_ano) > 0, max(semanas_ano), 0)
-      
-      if(total_SE > 0) {
-        semanas_completas <- sprintf("%s%02d", .y$ano, 1:total_SE)
+completar_dados_bairros <- function(dados_bairros, bairros_unicos, se_var, nm_bairr_var, group_var = "arbo") {
+  
+  # Verify required columns exist
+  required_cols <- c(se_var, nm_bairr_var, group_var, "notificações")
+  missing_cols <- setdiff(required_cols, names(dados_bairros))
+  if (length(missing_cols) > 0) {
+    stop("Missing columns: ", paste(missing_cols, collapse = ", "))
+  }
+  
+  # Split by arbovirus type
+  dados_split <- split(dados_bairros, dados_bairros[[group_var]])
+  
+  # Process each subset
+  resultados <- lapply(dados_split, function(subset) {
+    
+    current_arbo <- unique(subset[[group_var]])
+    if (length(current_arbo) != 1) stop("Multiple arbo values in subset")
+    
+    subset %>%
+      mutate(ano = substr(.data[[se_var]], 1, 4)) %>%
+      group_by(ano) %>%
+      group_modify(~ {
+        semanas_ano <- as.numeric(substr(.x[[se_var]], 5, 6))
+        total_SE <- ifelse(length(semanas_ano) > 0, max(semanas_ano), 0)
         
-        expand_grid(
-          NM_BAIRRO_REF = bairros_unicos,
-          SEM_NOT = semanas_completas
-        ) %>%
-          left_join(.x, by = c("NM_BAIRRO_REF", "SEM_NOT")) %>%
-          mutate(notificações = replace_na(notificações, 0))
-      } else {
-        .x
-      }
-    }) %>%
-    ungroup() %>%
-    arrange(NM_BAIRRO_REF, SEM_NOT)
+        if (total_SE > 0) {
+          semanas_completas <- sprintf("%s%02d", .y$ano, 1:total_SE)
+          
+          expand_grid(
+            !!nm_bairr_var := bairros_unicos,
+            !!se_var := as.numeric(semanas_completas),
+            !!group_var := current_arbo  # Include the arbo value
+          ) %>%
+            left_join(.x, by = c(nm_bairr_var, se_var, group_var)) %>%
+            mutate(notificações = coalesce(notificações, 0))
+        } else {
+          .x
+        }
+      }) %>%
+      ungroup() %>%
+      select(-ano)
+  })
+  
+  # Combine all results
+  bind_rows(resultados) %>%
+    arrange(!!sym(group_var), !!sym(nm_bairr_var), !!sym(se_var))
 }
 
 # Função para calcular alerta 
 calcular_alerta <- function(id, nome, coluna_id, data, gtdist, meangt, sdgt) {
   bdi <- data %>%
     filter(.data[[coluna_id]] == id) %>%  # Filtra usando a coluna passada como string
-    arrange(SE) %>%
+    arrange(sem_not) %>%
     AlertTools::Rt(count = "casos", gtdist = gtdist, meangt = meangt, sdgt = sdgt)
   
   # Aplicar critérios de alerta
@@ -74,7 +98,7 @@ classificar_bairros_distrito <- function(sp_distritos, sp_bairros) {
   # Interseção espacial
   intersecao <- st_intersection(centroides, sp_distritos) %>%
     st_drop_geometry() %>%
-    select(nome_bairr, id_bairro, Distrito)
+    select(nome_bairr, id_bairro, distrito)
   
   # Completar com distritos mais próximos se necessário
   resultado <- sp_bairros %>%
@@ -82,16 +106,17 @@ classificar_bairros_distrito <- function(sp_distritos, sp_bairros) {
     left_join(intersecao, by = c("nome_bairr", "id_bairro"))
   
   # Para bairros sem classificação, usar distrito mais próximo
-  sem_distrito <- which(is.na(resultado$Distrito))
+  sem_distrito <- which(is.na(resultado$distrito))
   if(length(sem_distrito) > 0) {
     indices_proximos <- st_nearest_feature(
       st_centroid(resultado[sem_distrito,]), 
       sp_distritos
     )
-    resultado$Distrito[sem_distrito] <- sp_distritos$Distrito[indices_proximos]
+    resultado$distrito[sem_distrito] <- sp_distritos$distrito[indices_proximos]
   }
   
-  return(resultado %>% select(-nome_bairr) %>% rename(geometry_distritos = geometry))
+  return(resultado %>% #select(-nome_bairr) %>%
+           rename(geometry_distritos = geometry))
 }
 
 # Função otimizada para gerar mapas
@@ -278,13 +303,13 @@ create_incidence_plot <- function(nowcast_data, observed_data, title_suffix = NU
     ) +
     # Nowcasting
     geom_line(
-      data = nowcast_data %>% dplyr::filter(type == "Nowcasting"),
+      data = nowcast_data %>% dplyr::filter(type == "Nowcasting"  & ano_epi %in% ultimas_semanas),
       aes(x = factor(ano_epi), y = Median, color = "Nowcasting", group = type),
       linewidth = 0.5, linetype = 2
     ) +
     # Ribbon nowcasting
     geom_ribbon(
-      data = nowcast_data %>% dplyr::filter(type == "Nowcasting"),
+      data = nowcast_data %>% dplyr::filter(type == "Nowcasting"  & ano_epi %in% ultimas_semanas),
       aes(x = factor(ano_epi), ymin = LI, ymax = LS, fill = "Nowcasting", group = type),
       alpha = 0.2
     )+
@@ -403,28 +428,30 @@ create_map_panel <- function(plots_list, legend_title = "Incidência (100.000 pe
               x = 0.65, y = 0.1, width = 0.27) +
     draw_plot(plots_list[[length(plots_list)]] + theme(legend.position = "none"), 
               x = 0.4, y = -0.3, width = 0.27) +
-    draw_grob(legend_grob, x = 0.3, y = 0.05,width = 0.4)
+    draw_grob(legend_grob, x = 0.3, y = 0.05,width = 0.4) 
 }
 
 
 # Função para nowcasting por distrito
-processar_nowcast_distrito <- function(distrito_nome, K = NULL, Dmax = NULL) {
+processar_nowcast_distrito <- function(dados_distritos,distritos_nomes, K = NULL, Dmax = NULL) {
   # Preparar dados
-  dados_distrito <- distrito_nowcast %>% 
-    left_join(dg_bairros %>%
-                select(NM_BAIRRO_REF, Distrito) %>% 
-                distinct, 
-              by = "NM_BAIRRO_REF") %>% 
-    select(NU_NOTIFIC,SEM_NOT,DT_DIGITA,DT_SIN_PRI,Distrito) %>% 
-    na.omit() %>% 
-    filter(Distrito == distrito_nome,
-           year(DT_SIN_PRI) %in% c(ano_atual-2, ano_atual-1, ano_atual)) %>%
-    rename_with(tolower) %>%
-    select(dt_sin_pri, dt_digita, distrito)
+  # dados_distrito <- nowcastdg_dis %>% 
+  #   left_join(df_bairros %>%
+  #               select(nm_bairro_ref, distrito) %>% 
+  #               distinct, 
+  #             by = "nm_bairro_ref") %>% 
+  #   select(nu_notific,sem_not,dt_digita,dt_sin_pri,distrito) %>% 
+  #   #na.omit() %>% 
+  #   filter(distrito == distrito_nome,
+  #          year(dt_sin_pri) %in% c(ano_atual-2, ano_atual-1, ano_atual)) %>%
+  #   select(dt_sin_pri, dt_digita, distrito)
+  
+  # dados_distrito[dados_distrito == ""] <- NA
+  # dados_distrito <- na.omit(dados_distrito)
   
   # Gerar nowcasting
   df_nowcast <- nowcasting_inla(
-    dataset = dados_distrito,
+    dataset = dados_distritos,
     data.by.week = TRUE,
     date_onset = dt_sin_pri,
     date_report = dt_digita,
@@ -435,7 +462,7 @@ processar_nowcast_distrito <- function(distrito_nome, K = NULL, Dmax = NULL) {
   df_nowcast$total <- df_nowcast$total %>%
     mutate(
       ano = year(dt_event),
-      epiweek = lubridate::epiweek(dt_event),
+      epiweek = epical::epi_week(dt_event)[[1]],
       ano_epi = case_when(
         epiweek == 1 & lag(epiweek, default = 52) == 52 ~ 
           paste0(ano_atual, str_pad(epiweek, width = 2, side = "left", pad = "0")),
@@ -448,10 +475,10 @@ processar_nowcast_distrito <- function(distrito_nome, K = NULL, Dmax = NULL) {
     )
   
   # Dados observados por semana
-  dados_by_week <- dados_distrito %>%
+  dados_by_week <- dados_distritos %>%
     mutate(
       dt_event = dt_sin_pri,
-      epiweek = epiweek(dt_event),
+      epiweek = epical::epi_week(dt_event)[[1]],
       ano = year(dt_event),
       ano_epi = paste0(ano, str_pad(epiweek, width = 2, pad = "0"))
     ) %>%
@@ -460,11 +487,11 @@ processar_nowcast_distrito <- function(distrito_nome, K = NULL, Dmax = NULL) {
     group_by(ano_epi) %>%
     summarise(total_Y = sum(total_Y), .groups = "drop") %>%
     left_join(
-      dg_distritos %>% 
-        filter(Distrito == distrito_nome) %>%
-        mutate(SE = as.character(SE)) %>%
-        select(SE, nivel),
-      by = c("ano_epi" = "SE")
+      df_distritos %>% 
+        filter(distrito == distritos_nomes) %>%
+        mutate(sem_not = as.character(sem_not)) %>%
+        select(sem_not, nivel),
+      by = c("ano_epi" = "sem_not")
     )
   
   return(list(nowcast = df_nowcast, observado = dados_by_week))
