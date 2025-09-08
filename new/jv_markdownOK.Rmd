@@ -1297,7 +1297,7 @@ perda_notificação <- df_bairros %>%
                        labels = c("dengue","chikungunya")))
 ```
 
-```{r mapbiomas}
+```{r mapbiomas, include=FALSE}
 
 mapbiomas <- terra::rast("./mapbiomas-brazil-collection-90-2023.tif")
 mapbiomas2 <- as.data.frame(mapbiomas,xy=T)
@@ -2294,149 +2294,149 @@ tab7_ok <- tab7 %>% ungroup() %>%
               subtitle = md(""))
 
 # TABELA 8 PRECISA DOS DADOS DE CHIKON PARA RODAR
-casos_acumulado_passado_distrito_chikon <- df_distritos %>% 
-  mutate(ew = substr(sem_not,5,6)) %>%
-  filter(arbo == "chikon" &
-           ano == ano_atual - 1  &
-           ew %in% 1:substr(weeks_2_plot[3],5,6)) %>%
-  group_by(distrito) %>% 
-  summarise(casos_passado = sum(casos))
-
-tab8 <- df_distritos %>% 
-  mutate(ew = substr(sem_not,5,6)) %>%
-  filter(arbo == "chikon" &
-           ano == ano_atual &
-           ew %in% 1:substr(weeks_2_plot[3],5,6)) %>%
-  group_by(distrito) %>% 
-  summarise(casos = sum(casos)) %>% 
-  left_join(casos_acumulado_passado_distrito_chikon) %>% 
-  mutate(pop = populacoes_distritos,
-         inc = casos/pop * 1e5,
-         comp = casos/casos_passado) %>% 
-  select(distrito,casos,inc,comp)
-
-
-
-tab8_ok <- tab8 %>%
-  mutate(comp = (round(comp,3)*100)) %>% 
-  gt() %>%
-  fmt_number(columns = c(casos, inc), decimals = 0) %>%
-  text_transform(
-    locations = cells_body(columns = comp),
-    fn = function(x) {
-      # Converter para numérico
-      prop <- as.numeric(x)
-      
-      # Aplicar condições
-      case_when(
-        prop >= 100 ~ paste(x, "<span style='color:red;font-size:30px;'>↑</span>"),
-        prop <= 100 ~ paste(x, "<span style='color:green;font-size:30px;'>↓</span>"),
-        TRUE ~ x
-      )
-    }
-  ) %>%
-  cols_label(
-    distrito = "Distrito",
-    casos = html(paste0("Casos acumulados<br>até ", weeks_2_plot[3])),
-    inc = html("Incidência acumulada<br>(por 100 mil hab.)"),
-    comp = html("Variação<br>(%)")
-  ) %>%
-  tab_options(
-    table.font.size = "14px"
-  ) %>% 
-   tab_style(
-    style = cell_text(align = "center", v_align = "middle"),  
-    locations = list(
-      cells_body(),          
-      cells_column_labels()  
-    )
-  ) %>% 
-  tab_header(title = md("chikungunya"),
-              subtitle = md(""))
-
-# TABELA 9 ## PRECISA DOS DADOS DE CHIKON
-
-casos_acumulado_passado_distrito_chikon <- df_distritos %>% 
-  #mutate(ew = substr(sem_not,5,6)) %>%
-  filter(arbo == "chikon" &
-           ano == ano_atual  &
-           sem_not %in% weeks_2_plot) %>%
-  group_by(sem_not,distrito) %>% 
-  summarise(casos_passado = sum(casos))
-
-
-tab9 <- df_distritos %>% 
-  #mutate(ew = substr(sem_not,5,6)) %>%
-  filter(arbo == "chikon" &
-           ano == ano_atual  &
-           sem_not %in% weeks_2_plot) %>%
-  group_by(sem_not,distrito) %>% arrange(desc(sem_not)) %>% 
-  summarise(casos_notificados = sum(casos),
-            nivel = sum(nivel))  %>% 
-  mutate(pop = populacoes_distritos,
-         inc = casos_notificados/pop * 1e5) %>% 
-  # left_join(distritos_estimados_dengon %>% 
-  #             mutate(ano_epi= as.numeric(ano_epi)),
-  #           by = c("sem_not" = "ano_epi", "distrito")) %>% 
-  select(sem_not,distrito,casos_notificados,inc,nivel) %>% 
-  mutate(
-    nivel = case_when(
-      nivel == 1 ~ "verde",
-      nivel == 2 ~ "amarelo",
-      nivel == 3 ~ "laranja",
-      nivel == 4 ~ "vermelho"
-    ),
-    sem_not = as.numeric(as.character(sem_not)),
-    distrito = factor(distrito)
-  )
-  
-tab9_ok <- tab9 %>% ungroup() %>% 
-  arrange(sem_not,distrito) %>% 
-  gt() %>%
-  #fmt_number(columns = c(casos_notificados, Median, inc), decimals = 0) %>%
-  cols_label(
-    sem_not = "SE",
-    casos_notificados = "Casos notificados",
-    distrito = "Distrito",
-    inc = "Incidência",
-    nivel = "Nível"
-  ) %>%
-  tab_options(
-    table.font.size = "14px"
-  ) %>% 
-   tab_style(
-    style = cell_text(align = "center", v_align = "middle"),  
-    locations = list(
-      cells_body(),          
-      cells_column_labels()  
-    )
-  ) %>% 
-   tab_style(
-    style = cell_text(color = "green", weight = "bold"),
-    locations = cells_body(
-      columns = nivel,
-      rows = nivel == "verde")
-  ) %>%
-  tab_style(
-    style = cell_text(color = "gold", weight = "bold"),
-    locations = cells_body(
-      columns = nivel,
-      rows = nivel == "amarelo")
-  ) %>%
-  tab_style(
-    style = cell_text(color = "darkorange", weight = "bold"),
-    locations = cells_body(
-      columns = nivel,
-      rows = nivel == "laranja")
-  ) %>%
-  tab_style(
-    style = cell_text(color = "red", weight = "bold"),
-    locations = cells_body(
-      columns = nivel,
-      rows = nivel == "vermelho")
-  ) %>% 
-  tab_header(title = md(""),
-              subtitle = md(""))
+# casos_acumulado_passado_distrito_chikon <- df_distritos %>% 
+#   mutate(ew = substr(sem_not,5,6)) %>%
+#   filter(arbo == "chikon" &
+#            ano == ano_atual - 1  &
+#            ew %in% 1:substr(weeks_2_plot[3],5,6)) %>%
+#   group_by(distrito) %>% 
+#   summarise(casos_passado = sum(casos))
+# 
+# tab8 <- df_distritos %>% 
+#   mutate(ew = substr(sem_not,5,6)) %>%
+#   filter(arbo == "chikon" &
+#            ano == ano_atual &
+#            ew %in% 1:substr(weeks_2_plot[3],5,6)) %>%
+#   group_by(distrito) %>% 
+#   summarise(casos = sum(casos)) %>% 
+#   left_join(casos_acumulado_passado_distrito_chikon) %>% 
+#   mutate(pop = populacoes_distritos,
+#          inc = casos/pop * 1e5,
+#          comp = casos/casos_passado) %>% 
+#   select(distrito,casos,inc,comp)
+# 
+# 
+# 
+# tab8_ok <- tab8 %>%
+#   mutate(comp = (round(comp,3)*100)) %>% 
+#   gt() %>%
+#   fmt_number(columns = c(casos, inc), decimals = 0) %>%
+#   text_transform(
+#     locations = cells_body(columns = comp),
+#     fn = function(x) {
+#       # Converter para numérico
+#       prop <- as.numeric(x)
+#       
+#       # Aplicar condições
+#       case_when(
+#         prop >= 100 ~ paste(x, "<span style='color:red;font-size:30px;'>↑</span>"),
+#         prop <= 100 ~ paste(x, "<span style='color:green;font-size:30px;'>↓</span>"),
+#         TRUE ~ x
+#       )
+#     }
+#   ) %>%
+#   cols_label(
+#     distrito = "Distrito",
+#     casos = html(paste0("Casos acumulados<br>até ", weeks_2_plot[3])),
+#     inc = html("Incidência acumulada<br>(por 100 mil hab.)"),
+#     comp = html("Variação<br>(%)")
+#   ) %>%
+#   tab_options(
+#     table.font.size = "14px"
+#   ) %>% 
+#    tab_style(
+#     style = cell_text(align = "center", v_align = "middle"),  
+#     locations = list(
+#       cells_body(),          
+#       cells_column_labels()  
+#     )
+#   ) %>% 
+#   tab_header(title = md("chikungunya"),
+#               subtitle = md(""))
+# 
+# # TABELA 9 ## PRECISA DOS DADOS DE CHIKON
+# 
+# casos_acumulado_passado_distrito_chikon <- df_distritos %>% 
+#   #mutate(ew = substr(sem_not,5,6)) %>%
+#   filter(arbo == "chikon" &
+#            ano == ano_atual  &
+#            sem_not %in% weeks_2_plot) %>%
+#   group_by(sem_not,distrito) %>% 
+#   summarise(casos_passado = sum(casos))
+# 
+# 
+# tab9 <- df_distritos %>% 
+#   #mutate(ew = substr(sem_not,5,6)) %>%
+#   filter(arbo == "chikon" &
+#            ano == ano_atual  &
+#            sem_not %in% weeks_2_plot) %>%
+#   group_by(sem_not,distrito) %>% arrange(desc(sem_not)) %>% 
+#   summarise(casos_notificados = sum(casos),
+#             nivel = sum(nivel))  %>% 
+#   mutate(pop = populacoes_distritos,
+#          inc = casos_notificados/pop * 1e5) %>% 
+#   # left_join(distritos_estimados_dengon %>% 
+#   #             mutate(ano_epi= as.numeric(ano_epi)),
+#   #           by = c("sem_not" = "ano_epi", "distrito")) %>% 
+#   select(sem_not,distrito,casos_notificados,inc,nivel) %>% 
+#   mutate(
+#     nivel = case_when(
+#       nivel == 1 ~ "verde",
+#       nivel == 2 ~ "amarelo",
+#       nivel == 3 ~ "laranja",
+#       nivel == 4 ~ "vermelho"
+#     ),
+#     sem_not = as.numeric(as.character(sem_not)),
+#     distrito = factor(distrito)
+#   )
+#   
+# tab9_ok <- tab9 %>% ungroup() %>% 
+#   arrange(sem_not,distrito) %>% 
+#   gt() %>%
+#   #fmt_number(columns = c(casos_notificados, Median, inc), decimals = 0) %>%
+#   cols_label(
+#     sem_not = "SE",
+#     casos_notificados = "Casos notificados",
+#     distrito = "Distrito",
+#     inc = "Incidência",
+#     nivel = "Nível"
+#   ) %>%
+#   tab_options(
+#     table.font.size = "14px"
+#   ) %>% 
+#    tab_style(
+#     style = cell_text(align = "center", v_align = "middle"),  
+#     locations = list(
+#       cells_body(),          
+#       cells_column_labels()  
+#     )
+#   ) %>% 
+#    tab_style(
+#     style = cell_text(color = "green", weight = "bold"),
+#     locations = cells_body(
+#       columns = nivel,
+#       rows = nivel == "verde")
+#   ) %>%
+#   tab_style(
+#     style = cell_text(color = "gold", weight = "bold"),
+#     locations = cells_body(
+#       columns = nivel,
+#       rows = nivel == "amarelo")
+#   ) %>%
+#   tab_style(
+#     style = cell_text(color = "darkorange", weight = "bold"),
+#     locations = cells_body(
+#       columns = nivel,
+#       rows = nivel == "laranja")
+#   ) %>%
+#   tab_style(
+#     style = cell_text(color = "red", weight = "bold"),
+#     locations = cells_body(
+#       columns = nivel,
+#       rows = nivel == "vermelho")
+#   ) %>% 
+#   tab_header(title = md(""),
+#               subtitle = md(""))
 
 # TABELA 10
 
@@ -2503,71 +2503,71 @@ tab10_ok <- tab10 %>% ungroup() %>%
 
 # TABELA 11 PRECISAR DOS DADOS DE CHIK
 
-tab11 <- bairros_ultima_semana_chikon %>% 
-  mutate(
-    inc = round(inc,1),
-    Rt = round(Rt,1),
-    nivel = case_when(
-      nivel == 1 ~ "verde",
-      nivel == 2 ~ "amarelo",
-      nivel == 3 ~ "laranja",
-      nivel == 4 ~ "vermelho"
-    )
-  ) %>% arrange(desc(inc))
-
-tab11_ok <- tab11 %>% ungroup() %>% 
-  gt() %>%
-  #fmt_number(columns = c(casos_notificados, Median, inc), decimals = 0) %>%
-  cols_label(
-    nm_bairro_ref = "Bairro",
-    casos = "Casos notificados",
-    distrito = "Distrito",
-    inc = "Incidência",
-    nivel = "Nível",
-    semanas_com_nivel3_4 = html("Semanas com nível crítico<br>(janela de 5 últimas semanas)")
-  ) %>%
-  tab_options(
-    table.font.size = "14px"
-  ) %>% 
-   tab_style(
-    style = cell_text(align = "center", v_align = "middle"),  
-    locations = list(
-      cells_body(),          
-      cells_column_labels()  
-    )
-  ) %>% 
-   tab_style(
-    style = cell_text(color = "green", weight = "bold"),
-    locations = cells_body(
-      columns = nivel,
-      rows = nivel == "verde")
-  ) %>%
-  tab_style(
-    style = cell_text(color = "gold", weight = "bold"),
-    locations = cells_body(
-      columns = nivel,
-      rows = nivel == "amarelo")
-  ) %>%
-  tab_style(
-    style = cell_text(color = "darkorange", weight = "bold"),
-    locations = cells_body(
-      columns = nivel,
-      rows = nivel == "laranja")
-  ) %>%
-  tab_style(
-    style = cell_text(color = "red", weight = "bold"),
-    locations = cells_body(
-      columns = nivel,
-      rows = nivel == "vermelho")
-  ) %>% 
-  tab_header(title = md("chikungunya"),
-              subtitle = md(""))
+# tab11 <- bairros_ultima_semana_chikon %>% 
+#   mutate(
+#     inc = round(inc,1),
+#     Rt = round(Rt,1),
+#     nivel = case_when(
+#       nivel == 1 ~ "verde",
+#       nivel == 2 ~ "amarelo",
+#       nivel == 3 ~ "laranja",
+#       nivel == 4 ~ "vermelho"
+#     )
+#   ) %>% arrange(desc(inc))
+# 
+# tab11_ok <- tab11 %>% ungroup() %>% 
+#   gt() %>%
+#   #fmt_number(columns = c(casos_notificados, Median, inc), decimals = 0) %>%
+#   cols_label(
+#     nm_bairro_ref = "Bairro",
+#     casos = "Casos notificados",
+#     distrito = "Distrito",
+#     inc = "Incidência",
+#     nivel = "Nível",
+#     semanas_com_nivel3_4 = html("Semanas com nível crítico<br>(janela de 5 últimas semanas)")
+#   ) %>%
+#   tab_options(
+#     table.font.size = "14px"
+#   ) %>% 
+#    tab_style(
+#     style = cell_text(align = "center", v_align = "middle"),  
+#     locations = list(
+#       cells_body(),          
+#       cells_column_labels()  
+#     )
+#   ) %>% 
+#    tab_style(
+#     style = cell_text(color = "green", weight = "bold"),
+#     locations = cells_body(
+#       columns = nivel,
+#       rows = nivel == "verde")
+#   ) %>%
+#   tab_style(
+#     style = cell_text(color = "gold", weight = "bold"),
+#     locations = cells_body(
+#       columns = nivel,
+#       rows = nivel == "amarelo")
+#   ) %>%
+#   tab_style(
+#     style = cell_text(color = "darkorange", weight = "bold"),
+#     locations = cells_body(
+#       columns = nivel,
+#       rows = nivel == "laranja")
+#   ) %>%
+#   tab_style(
+#     style = cell_text(color = "red", weight = "bold"),
+#     locations = cells_body(
+#       columns = nivel,
+#       rows = nivel == "vermelho")
+#   ) %>% 
+#   tab_header(title = md("chikungunya"),
+#               subtitle = md(""))
 
 ```
 
 ```{r, objetos_texto, include=FALSE}
 inc_acumulado_dengon <- round(casos_acumulado_atual_dengon/616317*1e5,1)
-
+week_atual <- paste0("SE", substr(weeks_2_plot[3],5,6))
 
 ```
 
@@ -2577,14 +2577,14 @@ inc_acumulado_dengon <- round(casos_acumulado_atual_dengon/616317*1e5,1)
 
 O município de Joinville (SC) é o mais populoso do estado (616.317 habitantes) e possui oficialmente 43 bairros em sua extensão urbana. O uso do espaço urbano de acordo com o uso do solo pode ser observado na figura 1.
 
-```{r, fig1, fig.cap= "Figura 1: Descrição do espaço urbano do município de Joinville de acordo com o uso do solo."}
+```{r fig1, echo=FALSE, fig.cap="Figura 1: Descrição do espaço urbano do município de Joinville de acordo com o uso do solo."}
 fig1
 
 ```
 
 O presente boletim apresenta análises realizadas nos níveis municipal, de distritos e bairros. Os distritos foram agregados com base na intersecção dos bairros com os três distritos de abrangência das Unidades Básicas de Saúde (UBS): Distrito Centro, Distrito Norte e Distrito Sul (Figura 2). Não capturamos a dinâmica da região rural do município devido a inexistência de informações precisas referentes a localidade das notificações nesta região, no entanto, os bairros Morro do Meio, Rio Bonito, Pirabeiraba, Vila Cubatão e Vila Nova frequentemente incorporam os casos que são associados à região rural.
 
-```{r, fig2, fig.cap= "Figura 2: Demarcação do ambiente urbano com bairros e distritos."}
+```{r fig2, echo=FALSE, fig.cap="Figura 2: Demarcação do ambiente urbano com bairros e distritos."}
 fig2
 
 ```
@@ -2598,7 +2598,10 @@ fig3
 
 ## Informação perdida
 
-```{r}
+A tabela 1 apresenta as informações sobre o número de casos notificados perdidos e o seu percentual em relação ao número de casos totais nas últimas 3 semanas epidemiológicas para dengue e chikungunya. Os casos perdidos correspondem às notificações que não puderam ser alocadas em um determinado bairro devido à falta de preenchimento da variável NM_BAIRRO ou do seu preenchimento com informações muito divergentes à lista de referência (composta por 43 bairros oficiais) e/ou não possuía o preenchimento da variável “ID_BAIRRO”. A figura 4 demonstra a informação perdida na série temporal do ano passado e ano atual.
+
+
+```{r echo=FALSE}
 tab1_ok
 ```
 
@@ -2610,7 +2613,7 @@ Esse ano foram notificados até o momento, `r casos_acumulado_atual_dengon` caso
 
 ## Casos notificados, incidência e variação de casos
 
-A tabela abaixo sumariza, considerando até a mesma semana epidemiológica `r week_2_plot[3]`` em relação ao ano anterior, os casos notificados acumulados, a incidência acumulada por 100 mil habitantes e, para comparação, a proporção de casos acumulados em relação aos notificados no ano passado.
+A tabela abaixo sumariza, considerando até a mesma semana epidemiológica `r week_atual` em relação ao ano anterior, os casos notificados acumulados, a incidência acumulada por 100 mil habitantes e, para comparação, a proporção de casos acumulados em relação aos notificados no ano passado.
 
 ```{r tab1, echo=FALSE, out.width="100%"}
 tab2_ok
@@ -2620,21 +2623,21 @@ fig4
 
 A tabela abaixo sumariza, considerando até as três últimas semanas epidemiológicas do ano corrente (SE 30, 31 e 32), os casos notificados, a incidência acumulada por 100 mil habitantes, os casos estimados, a receptividade climática e o nível de alerta para comparação.
 
-```{r, tab2}
+```{r tab2, echo=FALSE}
  tab3_ok
 
 ```
 
 A figuras 4 mostra o perfil de incidência de dengue e chikungunya na cidade e as cores indicam o nível de atenção da semana epidemiológica. A descrição do código de cores e a relação entre o nível de atenção do Infodengue com o nível de atenção do Plano de Contingência Nacional estão descritos na tabela em anexo.
 
-```{r, fig4, fig.cap= "Figura 4: Curva de incidência de Dengue (A) e Chikungunya (B) - Joinville/SC até SE 32/2025", fig.height = 8}
+```{r fig4, echo=FALSE, fig.cap="Figura 4: Curva de incidência de Dengue (A) e Chikungunya (B) - Joinville/SC até SE 32/2025", fig.height=8}
 fig5
 
 ```
 
 A tabela abaixo traz um resumo sobre o padrão de variação do número de casos notificados, número de semanas com condições favoráveis para a transmissão e número de semanas com transmissão efetiva observados nesse ano em relação aos casos do ano passado, considerando até a mesma semana epidemiológica (SE 32):
 
-```{r, tab3}
+```{r tab3, echo=FALSE}
  tab4_ok
 
 ```
@@ -2643,14 +2646,14 @@ A tabela abaixo traz um resumo sobre o padrão de variação do número de casos
 
 A figura 5 mostra respectivamente as curvas de incidência de casos de dengue e chikungunya para o município, bem como as faixas de atenção relacionadas ao limiar epidêmico estabelecido utilizando dados históricos. As faixas verde e vermelho indicam, respectivamente, incidência abaixo e acima do limiar pré-epidêmico da cidade.
 
-```{r, tab4}
+```{r tab4, echo=FALSE}
  tab5_ok
 
 
 
 ```
 
-```{r, fig6, fig.cap= "Figura 6 : Nível de atenção de Dengue (A) e Chikungunya (B) em cada semana epidemiológica do município.", fig.height=8}
+```{r fig6, echo=FALSE, fig.cap="Figura 6 : Nível de atenção de Dengue (A) e Chikungunya (B) em cada semana epidemiológica do município.", fig.height=8}
 fig6
 
 ```
@@ -2660,21 +2663,21 @@ fig6
 O perfil sazonal das arboviroses está representado nos gráficos abaixo. O perfil sazonal da receptividade climática para o município (figura 6) apresenta uma escala que varia de 0 (período pouco receptivo) a 100 (período muito receptivo) sendo que, períodos muito receptivos, marcam a sazonalidade da doença. A linha amarela corresponde à variação da temperatura mínima durante o período, as barras azuis correspondem às semanas as quais a receptividade climática do município esteve acima do limiar favorável à transmissão de arboviroses.    
 
 
-```{r fig7, fig.cap="Figura 7: Receptividade climática do município e temperatura mínima até SE 32/2025", message=FALSE, warning=FALSE, fig.height=6}
+```{r fig7, echo=FALSE, fig.cap="Figura 7: Receptividade climática do município e temperatura mínima até SE 32/2025", fig.height=6, message=FALSE, warning=FALSE}
 fig7
 
 ```
 
 O perfil sazonal das séries temporais de incidência de casos de dengue nos últimos 10 anos e chikungunya 5 anos estão representadas na figura 7 e podem ser comparadas com a incidência desse ano (marcado em vermelho).
 
-```{r, fig8, fig.cap="Figura 8: Comparação da incidência do ano atual com do ano passado para Dengue (A) e Chikungunya (B)", fig.height=8}
+```{r fig8, echo=FALSE, fig.cap="Figura 8: Comparação da incidência do ano atual com do ano passado para Dengue (A) e Chikungunya (B)", fig.height=8}
 fig8
 
 ```
 
 O perfil de transmissibilidade (figura 8) descreve o número reprodutivo médio ao longo do ano e valores maiores que 1 indicam histórico de risco, especialmente se ocorrerem em sequência. O número reprodutivo médio dos casos de dengue (figura 8A) foi calculado ao longo dos últimos 10 anos, enquanto chikungunya (figura 8B) dos últimos 5 anos. 
 
-```{r, fig9, fig.cap="Figura 9: Número reprodutivo semanal de Dengue (A) e Chikungunya (B) para o município estimado até SE 32/2025", fig.height=8}
+```{r fig9, echo=FALSE, fig.cap="Figura 9: Número reprodutivo semanal de Dengue (A) e Chikungunya (B) para o município estimado até SE 32/2025", fig.height=8}
 fig9
 
 ```
@@ -2688,7 +2691,7 @@ fig9
 
 A tabela abaixo sumariza, considerando até a mesma semana epidemiológica (SE 32) em relação ao ano anterior, os casos notificados, a incidência acumulada por 100 mil habitantes e, para comparação, a proporção de casos acumulados em relação aos notificados no ano passado.
 
-```{r, tab6}
+```{r tab6, echo=FALSE}
 tab6_ok
 
 
@@ -2696,21 +2699,21 @@ tab6_ok
 
 A tabela abaixo sumariza, considerando até as três últimas semanas epidemiológicas do ano corrente (SE 30, 31 e 32) e cada um dos Distritos de Saúde, o número de casos acumulados, o número de casos notificados, os casos estimados e a incidência acumulada por 100 mil habitantes e o nível de alerta para comparação.
 
-```{r, tab7, fig.cap="Nota: Os quatro níveis de alerta do Infodengue e a relação com o nível de atenção do Plano de Contingência Nacional estão descritos na tabela em anexo."}
+```{r tab7, echo=FALSE, fig.cap="Nota: Os quatro níveis de alerta do Infodengue e a relação com o nível de atenção do Plano de Contingência Nacional estão descritos na tabela em anexo."}
 tab7_ok
 
 ```
 
 A figuras 9 mostra o perfil de incidência de dengue nos Distritos de Saúde e as cores indicam o nível de atenção da semana epidemiológica. O código de cores indica o nível de alerta da semana epidemiológica. 
 
-```{r, fig10, fig.cap="Figura 10: Curva de incidência de Dengue para os Distritos Centro, Norte e Sul até a SE 32/2025", fig.height=11}
+```{r fig10, echo=FALSE, fig.cap="Figura 10: Curva de incidência de Dengue para os Distritos Centro, Norte e Sul até a SE 32/2025", fig.height=11}
 fig10
 
 ```
 
 A figura 10 ilustra a incidência por 100 mil habitantes dos casos notificados de dengue agregados pelos Distrito de Saúde em Joinville, entre as semanas epidemiológicas 30 e 32 de 2025 . Para cada semana é apresentada a porcentagem de casos notificados que não puderam ser alocados em nenhum Distrito de Saúde devido a problemas no preenchimento ou ausência de informação sobre o local de ocorrência dos casos.
 
-```{r, fig11, fig.cap="Figura 11: Incidência de dengue (casos por 100.000 habitantes) nos distritos nas últimas 3 semanas epidemiológicas", fig.height=8}
+```{r fig11, echo=FALSE, fig.cap="Figura 11: Incidência de dengue (casos por 100.000 habitantes) nos distritos nas últimas 3 semanas epidemiológicas", fig.height=8}
 fig11
 
 ```
@@ -2720,26 +2723,26 @@ fig11
 A tabela abaixo sumariza, considerando até a mesma semana epidemiológica (SE 32) em relação ao ano anterior, os casos notificados de chikungunya, a incidência acumulada por 100 mil habitantes e, para comparação, a proporção de casos acumulados em relação aos notificados no ano passado.
 
 
-```{r,tab8}
+```{r tab8, echo=FALSE}
 #tab8_ok
 
 ```
 
 A tabela abaixo sumariza, considerando até as três últimas semanas epidemiológicas do ano corrente (SE 30, 31 e 32) e cada um dos Distritos, o número de casos acumulados, o número de casos notificados, os casos estimados e a incidência acumulada por 100 mil habitantes e o nível de alerta para comparação.
 
-```{r, tab9}
+```{r tab9, echo=FALSE}
 #tab9_ok
 
 ```
 
-```{r, fig12, fig.cap="Figura 12: Curva de incidência de Chikungunya para os Distritos Centro, Norte e Sul até a SE 32/2025", fig.height=11}
+```{r fig12, echo=FALSE, fig.cap="Figura 12: Curva de incidência de Chikungunya para os Distritos Centro, Norte e Sul até a SE 32/2025", fig.height=11}
 fig12
 
 ```
 
 A figura 12 ilustra a incidência por 100 mil habitantes dos casos notificados de chikungunya agregados pelos Distrito de Saúde em Joinville, entre as semanas epidemiológicas 30 e 32 de 2025 . Para cada semana é apresentada a porcentagem de casos notificados que não puderam ser alocados em nenhum Distrito de Saúde devido a problemas no preenchimento ou ausência de informação sobre o local de ocorrência dos casos.
 
-```{r, fig13, fig.cap="Figura 13: Incidência de Chikungunya (casos por 100.000 habitantes) nos distritos nas últimas 3 semanas epidemiológicas", fig.height=8}
+```{r fig13, echo=FALSE, fig.cap="Figura 13: Incidência de Chikungunya (casos por 100.000 habitantes) nos distritos nas últimas 3 semanas epidemiológicas", fig.height=8}
 fig13
 
 ```
@@ -2748,7 +2751,7 @@ fig13
 
 A figura 13 mostra respectivamente as curvas de incidência de casos de dengue e chikungunya para os Distritos de Saúde, bem como as faixas de atenção relacionadas ao limiar epidêmico estabelecido, utilizando os dados históricos. As faixas verde e vermelho indicam, respectivamente, incidência abaixo e acima do limiar pré-epidêmico da cidade.
 
-```{r, fig14, fig.cap = "Figura 14: Nível de atenção de cada semana epidemiológica do município por distrito e arbovirose", fig.height=8}
+```{r fig14, echo=FALSE, fig.cap="Figura 14: Nível de atenção de cada semana epidemiológica do município por distrito e arbovirose", fig.height=8}
 fig14
 
 ```
@@ -2757,25 +2760,25 @@ fig14
 
 O perfil sazonal das arboviroses está representado nos gráficos abaixo. O perfil sazonal da receptividade climática para os Distritos de Saúde (figura 14) apresenta uma escala que varia de 0 (período pouco receptivo) a 100 (período muito receptivo) sendo que, períodos muito receptivos, marcam a sazonalidade da doença. A linha amarela corresponde à variação da temperatura mínima durante o período, as barras azuis correspondem às semanas as quais a receptividade climática do município esteve acima do limiar favorável à transmissão de arboviroses.
 
-```{r,downscaling}
+```{r downscaling, echo=FALSE}
 
 ```
 
 O perfil sazonal das séries temporais de incidência de casos de dengue nos últimos 10 anos (Figura 15A-C) e chikungunya 5 anos (Figura 15D-E) para cada um dos Distritos e podem ser comparadas com a incidência desse ano (marcado em vermelho).
 
-```{r, fig15, fig.cap = "Figura 15: Comparação da incidência de dengue dos Distritos do ano atual com do ano passado", fig.height=8}
+```{r fig15, echo=FALSE, fig.cap="Figura 15: Comparação da incidência de dengue dos Distritos do ano atual com do ano passado", fig.height=8}
 fig15
 ```
 
 
 O perfil de transmissibilidade descreve o número reprodutivo médio ao longo do ano e valores maiores que 1 indicam histórico de risco, especialmente se ocorrerem em sequência. O número reprodutivo médio dos casos de dengue (Figura 15) foi calculado ao longo dos últimos 10 anos, enquanto chikungunya (Figura 16) dos últimos 5 anos. 
 
-```{r, fig16, fig.cap = "Figura 16: Número reprodutivo de dengue por Distrito semanal estimado até SE 32/2025", fig.height=8}
+```{r fig16, echo=FALSE, fig.cap="Figura 16: Número reprodutivo de dengue por Distrito semanal estimado até SE 32/2025", fig.height=8}
 fig16
 
 ```
 
-```{r, fig17, fig.cap = "Figura 17: Número reprodutivo de chikungunya por Distrito semanal estimado até SE 32/2025", fig.height=8}
+```{r fig17, echo=FALSE, fig.cap="Figura 17: Número reprodutivo de chikungunya por Distrito semanal estimado até SE 32/2025", fig.height=8}
 fig17
 
 ```
@@ -2788,14 +2791,14 @@ fig17
 
 A tabela abaixo apresenta os 10 bairros com maior carga epidemiológica na semana atual, detalhando número de casos notificados, incidência, Rt, nível de alerta e número de semanas com nível de alerta crítico (níveis laranja e vermelho) nas últimas 5 semanas. 
 
-```{r, tab10}
+```{r tab10, echo=FALSE}
 tab10_ok
 
 ```
 
 A figura 17 mostra o perfil de incidência de dengue nos três bairros que apresentaram a maior incidência na semana atual e as cores indicam o nível de atenção da semana epidemiológica. O código de cores indica o nível de alerta da semana epidemiológica. 
 
-```{r, fig18, fig.cap = "Figura 18: Curva de incidência de Dengue nos bairros de maior incidência na semana 32/2025", fig.height=11}
+```{r fig18, echo=FALSE, fig.cap="Figura 18: Curva de incidência de Dengue nos bairros de maior incidência na semana 32/2025", fig.height=11}
 fig18
 
 ```
@@ -2803,7 +2806,7 @@ fig18
 
 A figura 18 ilustra a incidência por 100 mil habitantes dos casos notificados de dengue agregados por bairros em Joinville, entre as semanas epidemiológicas 30 e 32 de 2025. Para cada semana é apresentada a porcentagem de casos notificados que não puderam ser alocados em nenhum bairro devido a problemas no preenchimento ou ausência de informação sobre o local de ocorrência dos casos.
 
-```{r, fig19, fig.cap = "Figura 19: Incidência de Dengue nos bairros nas últimas 3 semanas epidemiológicas", fig.height=8}
+```{r fig19, echo=FALSE, fig.cap="Figura 19: Incidência de Dengue nos bairros nas últimas 3 semanas epidemiológicas", fig.height=8}
 fig19
 
 ```
@@ -2812,14 +2815,14 @@ fig19
 
 A tabela abaixo apresenta os 10 bairros com maior carga epidemiológica na semana atual, detalhando número de casos notificados, incidência, Rt, nível de alerta e frequência de permanência em baixo risco nas últimas 10 semanas.
 
-```{r, tab11}
+```{r tab11, echo=FALSE}
 #tab11_ok
 
 ```
 
 A figura 19 mostra o perfil de incidência de chikungunya nos três bairros que apresentaram a maior incidência na semana atual e as cores indicam o nível de atenção da semana epidemiológica. O código de cores indica o nível de alerta da semana epidemiológica. 
 
-```{r, fig20, fig.cap="Figura 20: Curva de incidência de Chikungunya nos bairros de maior incidência na semana 32/2025", fig.height=11}
+```{r fig20, echo=FALSE, fig.cap="Figura 20: Curva de incidência de Chikungunya nos bairros de maior incidência na semana 32/2025", fig.height=11}
 fig20
 
 ```
@@ -2827,7 +2830,7 @@ fig20
 
 A figura 20 ilustra a incidência por 100 mil habitantes dos casos notificados de chikungunya agregados por bairros em Joinville, entre as semanas epidemiológicas 30 e 32 de 2025. Para cada semana é apresentada a porcentagem de casos notificados que não puderam ser alocados em nenhum bairro devido a problemas no preenchimento ou ausência de informação sobre o local de ocorrência dos casos.
 
-```{r,fig21, fig.cap = "Figura 21: Incidência nos bairros nas últimas 3 semanas epidemiológicas", fig.height=8}
+```{r fig21, echo=FALSE, fig.cap="Figura 21: Incidência nos bairros nas últimas 3 semanas epidemiológicas", fig.height=8}
 fig21
 
 ```
