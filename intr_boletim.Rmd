@@ -5,6 +5,10 @@ date: "2025-09-07"
 output: html_document
 ---
 
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(error = TRUE)  # Show errors but continue knitting
+```
+
 ```{r pacotes, include=FALSE}
 # Configuração inicial
 pacman::p_load(
@@ -20,7 +24,7 @@ ano_atual <- year(Sys.Date())
 
 ```
 
-```{r Carregando dados, message=FALSE, warning=FALSE, cache=TRUE, include=FALSE}
+```{r Carregando dados, message=FALSE, warning=FALSE, cache=FALSE, include=FALSE}
 
 # DADOS REFERÊNCIA
 jv_pop <- read_csv2(
@@ -47,13 +51,31 @@ load("./Rt/clijv.RData") #substituir pelo downscale
 load("./Rt/paramsjv.RData")
 
 # Dados historico alerta
-dados_api <- read.csv2("./data/historico_alerta_joinville.csv") %>% 
-  mutate(arbo = "dengue")
+
+#### DADOS QUE VINICIUS MANDOU DE DENGUE VAO ATÈ SE34
+# dados_api_dengue <- read.csv2("./data/historico_alerta_joinville.csv") %>% 
+#   mutate(arbo = "dengue")
+
+dados_api_dengue <- read.csv("./data/se36/hist_dengue_completo.csv") %>% 
+  mutate(arbo = "dengue") %>% select(-c(notif_accum_year))
+
+
+dados_api_chikon <- read.csv("./data/se36/historico_chik.csv") %>% 
+  mutate(arbo = "chikon") %>% select(-c(municipio_nome,municipio_geocodigo))
+
+dados_api <- rbind(dados_api_dengue,
+                   dados_api_chikon)
+
+
 
 # Dados notificação 
-df_mun <- read.csv2("./data/notificacao_joinville.csv") %>% 
+df_mun <- read.csv("./data/se36/notif_completo.csv")  %>% 
   mutate(sem_not = paste0(ano_notif,sprintf("%02d",se_notif)),
-         arbo = "dengue") %>% 
+         arbo = case_when(
+           cid10_codigo == "A90" ~ "dengue",
+           cid10_codigo == "A92.0" ~ "chikon",
+           cid10_codigo == "A928" ~ "zika")
+         ) %>% 
   arrange(sem_not)
 
 # Semanas alvo
@@ -65,9 +87,14 @@ weeks_2_plot <- tail(
 limiar_preseason <- 7.12
 limiar_epidemico <- 72.46
 limiar_posseason <- 9.38
+
+##### DADOS DISTRITOS TEMP DOWNSCALING (NOVO)
+distrito_downsc <- read.csv("./data/se36/dist_temp_min_ate36.csv") %>% 
+  mutate(receptivo = ifelse(mean_pred > 18,1,0))
+
 ```
 
-```{r processar_dados, include=FALSE, cache=TRUE}
+```{r processar_dados, include=FALSE, cache=FALSE}
 ##### PROCESSAR DADOS PRINCIPAIS
 df_mun %<>% 
   #filter(NU_ANO %in% c(ano_atual-1, ano_atual)) %>%
@@ -132,17 +159,18 @@ df_distritos <- df_bairros %>%
   
 ##### DADOS NOWCASTING MUNICÍPIO
 nowcastdg_mun <- df_mun  %>% 
-  filter(year(dt_sin_pri) %in% c(ano_atual-2, ano_atual-1, ano_atual)) %>%
+  filter(year(dt_sin_pri) %in% c(ano_atual-2, ano_atual-1, ano_atual) & arbo == "dengue") %>%
   drop_na(dt_sin_pri, dt_digita) %>%
   select(arbo,dt_digita, dt_sin_pri,dt_notific)
 
 ##### DADOS NOWCASTING DISTRITO
 nowcastdg_dis <- df_mun_ok %>% 
+  filter(arbo == "dengue") %>% 
   left_join(res_distritos %>% 
               select(nome_bairr,distrito),
             by = c("nm_bairro_ref"="nome_bairr")) %>% 
-  select(dt_digita, dt_sin_pri,dt_notific,distrito) %>% 
-  na.omit()
+  select(dt_digita, dt_sin_pri,dt_notific,distrito) #%>% 
+  #na.omit()
 
 
 ##### ADICIONAR SHAPE MUNICIPIO NOS DADOS API (acho que não está sendo utilizado)
@@ -150,10 +178,10 @@ nowcastdg_dis <- df_mun_ok %>%
 # dados_api_chikon$geometry_mun <- sf::st_union(jvmun_shape$geom) 
 ```
 
-```{r perca_de_info, include=FALSE, cache=TRUE}
+```{r perca_de_info, include=FALSE, cache=FALSE}
 
 df_mun_id_bairro_miss <- df_mun %>% 
-  group_by(sem_not) %>% 
+  group_by(sem_not,arbo) %>% 
   summarise(
     total_id = n(),
     n_missing = sum(id_bairro == 0 | is.na(id_bairro), na.rm = TRUE),
@@ -161,7 +189,7 @@ df_mun_id_bairro_miss <- df_mun %>%
   ) 
 
 df_mun_nm_bairro_miss <- df_mun %>% 
-  group_by(sem_not) %>% 
+  group_by(sem_not,arbo) %>% 
   summarise(
     total_nm = n(),
     n_na_nm = sum(is.na(nm_bairro)),  
@@ -172,7 +200,7 @@ df_mun_miss <- left_join(df_mun_id_bairro_miss,
       df_mun_nm_bairro_miss) %>% as.data.frame() 
 ```
 
-```{r calculando_alerts, include=FALSE,cache=TRUE}
+```{r calculando_alerts, include=FALSE,cache=FALSE}
 ultimas_semanas <- tail(sort(unique(df_mun$sem_not)), 5)
 
 #### DISTRITOS
@@ -263,7 +291,7 @@ if (any(df_bairros$arbo == "chikon", na.rm = TRUE)) {
 }
 ```
 
-```{r nowscating, include=FALSE, cache=TRUE}
+```{r nowscating, include=FALSE, cache=FALSE}
 #### MUNICIPIO
 mun_nowscasting <-  nowcasting_inla(
   dataset = nowcastdg_mun,
@@ -314,9 +342,9 @@ jv_mun_nowscat <- list(mun_observados = mun_observados,
 jv_distritos_nowcast <- map(
   nomes_distrito,
   processar_nowcast_distrito,
-  dados_distrito = nowcastdg_dis ,
-  K = 0,
-  Dmax = 5)
+  dados_distrito = nowcastdg_dis,
+  K = 2,
+  Dmax = 7)
 
 names(jv_distritos_nowcast) <- nomes_distrito
 
@@ -328,7 +356,7 @@ populacoes_distritos <- c(
 )
 ```
 
-```{r definindo_bairros_plotar, include=FALSE,cache=TRUE}
+```{r definindo_bairros_plotar, include=FALSE,cache=FALSE}
 
 bairros_ultima_semana_dengue <- df_bairros %>%
   filter(arbo == "dengue") %>% 
@@ -372,7 +400,7 @@ bairros_ultima_semana_chikon %<>%
 ```
 
 
-```{r, include= FALSE, cache=TRUE}
+```{r, include= FALSE, cache=FALSE}
 ### CURVA DE INCIDÊNCIA E NIVEIS DE ALERTA 
 
 ## MUNICÍPIO
@@ -382,7 +410,7 @@ jv_inc_mun_dengon <- create_incidence_plot(
   nowcast_data = jv_mun_nowscat$mun_nowcast, 
   observed_data = jv_mun_nowscat$mun_observados, 
   title_suffix = paste0("Curva de incidência de dengue - Joinville até SE", weeks_2_plot[3]),
-  include_zoom = T, convert_to_incidence = T, pop = 616317
+  include_zoom = F, convert_to_incidence = T, pop = 616317
 )
 }
 
@@ -397,7 +425,8 @@ max_val <- max(dados_api %>%
                  filter(arbo == "chikon") %>% 
                  pull(p_inc100k))
 
- p_chik_main <- ggplot(dados_api %>% filter(arbo == "chikon" & SE >= 202401)) +
+ p_chik_main <- ggplot(dados_api %>%
+                         filter(arbo == "chikon" & SE >= paste0(ano_atual-1,substr(weeks_2_plot[3],5,6)))) +
   geom_segment(
     aes(x = factor(SE), xend = factor(SE), 
         y = 0, yend = p_inc100k, color = factor(nivel)),
@@ -407,14 +436,15 @@ max_val <- max(dados_api %>%
     aes(x = factor(SE), y = p_inc100k, group = 1),
     color = "steelblue", linewidth = 1
   ) +
+  geom_hline(yintercept = 72, col = "red", show.legend = F) +
   scale_color_manual(
     name = NULL,
     values = c("1" = "green", "2" = "yellow", 
                "3" = "orange", "4" = "red"),
     labels = c("1" = "Baixo Risco", 
-               "2" = "Atenção",
-               "3" = "Risco Moderado",
-               "4" = "Risco Alto"),
+               "2" = "Receptivo",
+               "3" = "Transmissão",
+               "4" = "Alta atividade"),
     breaks = c("1", "2", "3", "4")
   ) +
   scale_y_continuous(
@@ -463,17 +493,16 @@ max_val <- max(dados_api %>%
    labs(x = NULL, y = NULL, title = "Últimas 5 semanas") +
    scale_x_discrete(
      breaks = levels(factor(dados_api$SE))[
-       seq(1, nlevels(factor(dados_api$SE)), by = 1)
-     ]
+       seq(1, nlevels(factor(dados_api$SE)), by = 1)]
    ) 
  
-jv_inc_mun_chikon <-  p_chik_main +
-  inset_element(
-    p_chik_zoom,
-    left = 0.6,
-    bottom = 0.4,
-    right = 1,
-    top = 1)
+jv_inc_mun_chikon <-  p_chik_main #+
+  # inset_element(
+  #   p_chik_zoom,
+  #   left = 0.6,
+  #   bottom = 0.4,
+  #   right = 1,
+  #   top = 1)
 
 } else {
   jv_inc_mun_chikon <- NULL
@@ -490,7 +519,7 @@ jv_inc_distritos_dengon <- map(names(jv_distritos_nowcast), ~ {
     distrito_nome = distritos_nomes, 
     convert_to_incidence = T,
     pop = populacoes_distritos[distrito_nome],
-    include_zoom = T, 
+    include_zoom = F, 
     title_suffix = distrito_nome)
 })
 
@@ -503,20 +532,22 @@ min_val <- min(df_distritos %>% filter(arbo == "chikon") %>%
 max_val <- max(df_distritos %>% filter(arbo == "chikon") %>% 
                  pull(inc), na.rm = T)
 
-min_val_zoom <- min(df_distritos  %>%  filter(arbo == "chikon" & sem_not %in% tail(sort(unique(jv_intr_dados$df_distritos$sem_not)), 5)) %>%  
+min_val_zoom <- min(df_distritos  %>%  filter(arbo == "chikon" & sem_not %in% tail(sort(unique(df_distritos$sem_not)), 5)) %>%  
                       pull(inc))
 
-max_val_zoom <- max(df_distritos  %>%  filter(arbo == "chikon" & sem_not %in% tail(sort(unique(jv_intr_dados$df_distritos$sem_not)), 5)) %>%  
+max_val_zoom <- max(df_distritos  %>%  filter(arbo == "chikon" & sem_not %in% tail(sort(unique(df_distritos$sem_not)), 5)) %>%  
                       pull(inc))
 
 jv_inc_distritos_chikon <- 
-  df_distritos %>% filter(arbo == "chikon") %>% 
+  df_distritos %>% filter(arbo == "chikon" & 
+                          sem_not >= paste0(ano_atual-1,substr(weeks_2_plot[3],5,6))) %>% 
   group_split(distrito) %>%
   map(~{
     df_plot <- .x
-    ultimas_semanas <- tail(sort(unique(jv_intr_dados$df_distritos$sem_not)), 5)
+    ultimas_semanas <- tail(sort(unique(df_distritos$sem_not)), 5)
     
- p_main <-  ggplot(df_plot) +
+ p_main <-  ggplot(df_plot %>% 
+                     filter(sem_not >= paste0(sem_not-1,substr(weeks_2_plot[3],5,6)))) +
   geom_segment(
     aes(x = factor(sem_not), xend = factor(sem_not), 
         y = 0, yend = inc, color = factor(nivel)),
@@ -526,14 +557,15 @@ jv_inc_distritos_chikon <-
     aes(x = factor(sem_not), y = inc, group = 1),
     color = "steelblue", linewidth = 1
   ) +
+  geom_hline(yintercept = 72, col = "red", show.legend = F) +
   scale_color_manual(
     name = NULL,
     values = c("1" = "green", "2" = "yellow", 
                "3" = "orange", "4" = "red"),
     labels = c("1" = "Baixo Risco", 
-               "2" = "Atenção",
-               "3" = "Risco Moderado",
-               "4" = "Risco Alto"),
+               "2" = "Receptivo",
+               "3" = "Transmissão",
+               "4" = "Alta atividade"),
     breaks = c("1", "2", "3", "4")
   ) +
   scale_y_continuous(
@@ -586,12 +618,11 @@ jv_inc_distritos_chikon <-
    labs(x = NULL, y = NULL, title = "Últimas 5 semanas") +
    scale_x_discrete(
      breaks = levels(factor(df_plot$sem_not))[
-       seq(1, nlevels(factor(df_plot$sem_not)), by = 1)
-     ]
+       seq(1, nlevels(factor(df_plot$sem_not)), by = 1) ]
    ) 
  
  # Combinar os gráficos
- p_main + inset_element(p_zoom, left = 0.6, bottom = 0.3, right = 1, top = 1)
+ p_main #+ inset_element(p_zoom, left = 0.6, bottom = 0.3, right = 1, top = 1)
 
   })
 } else {
@@ -618,18 +649,23 @@ top_3_bairros_chikon <- df_bairros %>%
 
 # DENGON
 {
-min_val <- min(df_bairros %>% 
-                 filter(arbo == "dengue") %>% pull(inc), na.rm = T)
+min_val <- min(df_bairros %>%
+                 filter(arbo == "dengue" & 
+                        sem_not >= paste0(ano_atual-1,substr(weeks_2_plot[3],5,6))) %>% pull(inc), na.rm = T)
+  
 
-max_val <- max(df_bairros %>% 
-                 filter(arbo == "dengue") %>% pull(inc), na.rm = T)
+max_val <- max(df_bairros %>%
+                 filter(arbo == "dengue" & 
+                        sem_not >= paste0(ano_atual-1,substr(weeks_2_plot[3],5,6))) %>% pull(inc), na.rm = T)
+
 
 min_val_zoom <- min(df_bairros %>%  filter(arbo == "dengue" & sem_not %in% tail(sort(unique(df_bairros$sem_not)), 5)) %>% pull(inc))
 
 max_val_zoom <- max(df_bairros |> filter(arbo == "dengue" & sem_not %in% tail(sort(unique(df_bairros$sem_not)), 5)) %>% pull(inc))
 
 jv_inc_bairros_dengon <- df_bairros %>% 
-  filter(nm_bairro_ref %in% top_3_bairros_dengon & arbo == "dengue") %>%
+  filter(nm_bairro_ref %in% top_3_bairros_dengon & arbo == "dengue" & 
+        sem_not >= paste0(ano_atual-1,substr(weeks_2_plot[3],5,6))) %>%
   group_split(nm_bairro_ref) %>%
   map(~{
     dados_bairro <- .x
@@ -646,14 +682,15 @@ jv_inc_bairros_dengon <- df_bairros %>%
         aes(x = factor(sem_not), y = inc, group = 1),
         color = "steelblue", linewidth = 1
       ) +
+      #geom_hline(yintercept = 72, col = "red", show.legend = F) +
       scale_color_manual(
         name = NULL,
         values = c("1" = "green", "2" = "yellow", 
                    "3" = "orange", "4" = "red"),
         labels = c("1" = "Baixo Risco", 
-                   "2" = "Atenção",
-                   "3" = "Risco Moderado",
-                   "4" = "Risco Alto"),
+                   "2" = "Receptivo",
+                   "3" = "Transmissão",
+                   "4" = "Alta atividade"),
         breaks = c("1", "2", "3", "4")
       ) +
       theme_minimal() +
@@ -663,8 +700,7 @@ jv_inc_bairros_dengon <- df_bairros %>%
       ) +
       scale_x_discrete(
         breaks = levels(factor(dados_bairro$sem_not))[
-          seq(1, nlevels(factor(dados_bairro$sem_not)), by = 8)
-        ]
+          seq(1, nlevels(factor(dados_bairro$sem_not)), by = 8)]
       ) +
       scale_y_continuous(limits = c(min_val,max_val+1)) +
       labs(
@@ -705,12 +741,11 @@ jv_inc_bairros_dengon <- df_bairros %>%
       scale_y_continuous(limits = c(min_val_zoom,max_val_zoom+1)) +
       scale_x_discrete(
         breaks = levels(factor(dados_bairro$sem_not))[
-          seq(1, nlevels(factor(dados_bairro$sem_not)), by = 1)
-        ]
+          seq(1, nlevels(factor(dados_bairro$sem_not)), by = 1)]
       ) 
     
     # Combinar os gráficos
-    p_main + inset_element(p_zoom, left = 0.6, bottom = 0.3, right = 1, top = 1)
+    p_main #+ inset_element(p_zoom, left = 0.6, bottom = 0.3, right = 1, top = 1)
   })
 
 # Nomear os elementos da lista com os nomes dos bairros
@@ -723,12 +758,16 @@ names(jv_inc_bairros_dengon) <- df_bairros %>%
 # CHIKON
 if(length(top_3_bairros_chikon) > 0 && !identical(top_3_bairros_chikon, character(0))) {
 
-min_val <- min(df_bairros %>% 
-                 filter(arbo == "chikon") %>% pull(inc), na.rm = T)
+min_val <- min(df_bairros %>%
+                 filter(arbo == "chikon" & 
+                        sem_not >= paste0(ano_atual-1,substr(weeks_2_plot[3],5,6))) %>% pull(inc), na.rm = T)
 
-max_val <- max(df_bairros %>% 
-                 filter(arbo == "chikon") %>% pull(inc), na.rm = T)
+max_val <- max(df_bairros %>%
+                 filter(arbo == "chikon" & 
+                        sem_not >= paste0(ano_atual-1,substr(weeks_2_plot[3],5,6))) %>% pull(inc), na.rm = T)
 
+
+  
 min_val_zoom <- min(df_bairros |>
                       filter(sem_not %in% tail(sort(unique(df_bairros$sem_not)), 5) & arbo == "chikon") %>%
                       pull(inc))
@@ -738,7 +777,8 @@ max_val_zoom <- max(df_bairros |>
                       pull(inc))
 
 jv_inc_bairros_chikon <- df_bairros %>% 
-  filter(nm_bairro_ref %in% top_3_bairros_dengon & arbo == "chikon") %>%
+  filter(nm_bairro_ref %in% top_3_bairros_dengon & arbo == "chikon" & 
+         sem_not >= paste0(ano_atual-1,substr(weeks_2_plot[3],5,6))) %>%
   group_split(nm_bairro_ref) %>%
   map(~{
     dados_bairro <- .x
@@ -755,14 +795,15 @@ jv_inc_bairros_chikon <- df_bairros %>%
         aes(x = factor(sem_not), y = inc, group = 1),
         color = "steelblue", linewidth = 1
       ) +
+      #geom_hline(yintercept = 72, col = "red", show.legend = F) +
       scale_color_manual(
         name = NULL,
         values = c("1" = "green", "2" = "yellow", 
                    "3" = "orange", "4" = "red"),
         labels = c("1" = "Baixo Risco", 
-                   "2" = "Atenção",
-                   "3" = "Risco Moderado",
-                   "4" = "Risco Alto"),
+                   "2" = "Receptivo",
+                   "3" = "Transmissão",
+                   "4" = "Alta atividade"),
         breaks = c("1", "2", "3", "4")
       ) +
       theme_minimal() +
@@ -772,8 +813,7 @@ jv_inc_bairros_chikon <- df_bairros %>%
       ) +
       scale_x_discrete(
         breaks = levels(factor(dados_bairro$sem_not))[
-          seq(1, nlevels(factor(dados_bairro$sem_not)), by = 8)
-        ]
+          seq(1, nlevels(factor(dados_bairro$sem_not)), by = 8)]
       ) +
       scale_y_continuous(limits = c(min_val,max_val+1)) +
       labs(
@@ -819,7 +859,7 @@ jv_inc_bairros_chikon <- df_bairros %>%
       ) 
     
     # Combinar os gráficos
-    p_main + inset_element(p_zoom, left = 0.6, bottom = 0.3, right = 1, top = 1)
+    p_main #+ inset_element(p_zoom, left = 0.6, bottom = 0.3, right = 1, top = 1)
   })
 } else {
   jv_inc_bairros_chikon <- NULL
@@ -915,7 +955,8 @@ faixa_atividade_mun_chikon <- ggplot(
   geom_point(aes(x = as.factor(SE), y = p_inc100k)) +
   # Scales and theme
   scale_x_discrete(breaks = function(x) x[seq(1, length(x), by = max(1, length(x) %/% 5))]) +
-  coord_cartesian(ylim = c(0, max(dados_api$p_inc100k))) +
+  coord_cartesian(ylim = c(0, max(dados_api %>% 
+                                    filter(arbo=="chikon") %>% pull(p_inc100k)))) +
   theme_minimal(base_size = 14) +
   theme(
     axis.text.x = element_text(angle = 45)
@@ -1064,7 +1105,7 @@ comp_mun_anos_chikon <- dados_api %>% filter(arbo == "chikon") %>%
     legend.position = "top"
   ) +
   scale_color_manual(
-    values = c("red","grey48",'grey'), labels = c("Esse ano","2024","10 últimos anos"), name = NULL
+    values = c("red","grey48",'grey'), labels = c("Esse ano","2024","5 últimos anos"), name = NULL
   ) +
   labs(
         x = "Semanas Epidemiológicas",
@@ -1150,7 +1191,8 @@ for(i in 1:nrow(combinacoes)) {
 {
 rt_mun_dengon <- create_rt_plot(
   api_data = dados_api %>% 
-    filter(arbo == "dengue" & SE >= 202412), 
+    filter(arbo == "dengue" & 
+             SE >= paste0(ano_atual-1,substr(weeks_2_plot[3],5,6))), 
   weeks_limit = weeks_2_plot[3], 
   title_suffix = paste0("Curva de Rt dengue -  Joinville até ", weeks_2_plot[3]),
   sem_not = "SE"
@@ -1161,7 +1203,8 @@ rt_mun_dengon <- create_rt_plot(
 if (any(dados_api$arbo == "chikon", na.rm = TRUE)){
 rt_mun_chikon <- create_rt_plot(
   api_data = dados_api %>% 
-    filter(arbo == "chikon" & SE >= 202412), 
+    filter(arbo == "chikon" & 
+             SE >= paste0(ano_atual-1,substr(weeks_2_plot[3],5,6))), 
   weeks_limit = weeks_2_plot[3], 
   title_suffix = paste0("Curva de Rt chikungunya - Joinville até ", weeks_2_plot[3]),
   sem_not = "SE"
@@ -1176,7 +1219,8 @@ rt_mun_chikon <- create_rt_plot(
 {
 rt_distrito_dengon <- create_rt_plot(
   api_data = df_distritos %>% 
-    filter(arbo == "dengue" & sem_not >= 202412), 
+    filter(arbo == "dengue" & 
+             sem_not >= paste0(ano_atual-1,substr(weeks_2_plot[3],5,6))), 
   weeks_limit = weeks_2_plot[3], 
   facet_by = "distrito",
   title_suffix = paste0("Curva de Rt dengue - Joinville até ", weeks_2_plot[3]),
@@ -1188,7 +1232,8 @@ rt_distrito_dengon <- create_rt_plot(
 if (any(dados_api$arbo == "chikon", na.rm = TRUE)){
 rt_distrito_chikon <- create_rt_plot(
   api_data = df_distritos %>% 
-    filter(arbo == "chikon" & sem_not >= 202412), 
+    filter(arbo == "chikon" & 
+             sem_not >= paste0(ano_atual-1,substr(weeks_2_plot[3],5,6))), 
   weeks_limit = weeks_2_plot[3], 
   facet_by = "distrito",
   title_suffix = paste0("Curva de Rt chikungunya - Joinville até ", weeks_2_plot[3]),
@@ -1206,16 +1251,14 @@ rt_distrito_chikon <- create_rt_plot(
 
 # DENGON
 jv_map_distritos_dengon <- create_map_panel(generate_maps(
-  data = df_distritos %>% 
-    filter(arbo == "dengue"),value_col = "inc",
+  data = df_distritos, value_col = "inc",arbo = "dengue",
   weeks_2_plot = as.numeric(as.character(weeks_2_plot)))
 )
 
 # CHIKON
 if (any(df_distritos$arbo == "chikon", na.rm = TRUE)){
 jv_map_distritos_chikon <- create_map_panel(generate_maps(
-  data = df_distritos %>% 
-    filter(arbo == "chikon"),value_col = "inc",
+  data = df_distritos, value_col = "inc",arbo = "chikon",
   weeks_2_plot = as.numeric(as.character(weeks_2_plot))
 ))} else{
   jv_map_distritos_chikon <- NULL
@@ -1225,8 +1268,7 @@ jv_map_distritos_chikon <- create_map_panel(generate_maps(
 
 # DENGON
 jv_map_bairros_dengon <- create_map_panel(generate_maps(
-  data = df_bairros %>% 
-    filter(arbo == "dengue") ,value_col = "inc",
+  data = df_bairros ,value_col = "inc", arbo = "dengue",
   weeks_2_plot = as.numeric(as.character(weeks_2_plot)),
   shape = df_distritos, area = "distrito"
 ))
@@ -1235,8 +1277,7 @@ jv_map_bairros_dengon <- create_map_panel(generate_maps(
 # CHIKON
 if (any(df_bairros$arbo == "chikon", na.rm = TRUE)){
 jv_map_bairros_chikon <- create_map_panel(generate_maps(
-  data = df_bairros %>% 
-    filter(arbo == "chikon") ,value_col = "inc",
+  data = df_bairros, value_col = "inc", arbo = "chikon",
   weeks_2_plot = as.numeric(as.character(weeks_2_plot)),
   shape = df_distritos, area = "distrito"
 ))} else {
@@ -1349,7 +1390,8 @@ jv_bairros <- jv_shp %>% filter(
 ```
 
 
-```{r, include=FALSE, cache=TRUE}
+
+```{r, include=FALSE, cache=FALSE}
 
 # FIGURA 1 
 
@@ -1430,43 +1472,53 @@ ggsave("./plots/fig2.png",
 
 fig3 <- df_mun_miss %>% 
   filter(sem_not >= 202401) %>% 
-  # rename(sem_not = sem_not...1) %>% 
-  # rename(arbo = arbo...2) %>% 
-  select(sem_not,perc_na_id,perc_na_nome) %>%  # tirei arbo aqui pois só tem dengue
+  select(sem_not,arbo,perc_na_id,perc_na_nome) %>% 
   #mutate(ano = substr(sem_not,1,4)) %>%
-  pivot_longer(cols = 2:3, names_to = "var",
+  pivot_longer(cols = 3:4, names_to = "var",
                values_to = "n") %>%
   mutate(var = case_when(
     var == "perc_na_id" ~ "ID_BAIRRO",
-    var == "perc_na_nome" ~ "NM_BAIRRO")) %>% #,
-    # arbo = case_when(
-    #   arbo == "dengon" ~ "dengue",
-    #   arbo == "chikon" ~ "chikungunya"
-    # ) %>% #,
-    #arbo = factor(arbo, levels = c("dengue","chikungunya"))) %>%
+    var == "perc_na_nome" ~ "NM_BAIRRO"),
+    arbo = ifelse(arbo == "chikon","chikungunya",arbo),
+    arbo = factor(arbo, levels = c("dengue","chikungunya")),
+    ew = substr(sem_not,5,6),
+    ano = substr(sem_not,1,4)) %>%
+  complete(
+    ew = sprintf("%02d", 1:52),
+    ano = as.character(2024:2025),
+    arbo = c("dengue","chikungunya"),
+    var = c("ID_BAIRRO","NM_BAIRRO"),
+    fill = list( # preencher outras colunas com valores padrão
+      n = NA
+    )
+  ) %>% 
+  filter(ano == ano_atual) %>% 
   ggplot()+
   geom_hline(yintercept = 70, linetype = "dashed", color = "black") +
-  geom_line(aes(x = factor(sem_not), y = 100-n , col = var, group = var), size = 0.8,alpha = 0.8)+
-  geom_text(aes(label="Quantidade mínima", x = 15, y = 65),) +
+  geom_point(aes(x = factor(ew), y = 100-n , col = var, group = var), alpha = 1)+
+  # geom_line(aes(x=factor(ew), y = 100-n, group = var)) +
+  geom_text(aes(label="Quantidade mínima", x = 10, y = 65)) +
   theme_minimal(base_size = 11)+
   labs(y = "% de completude", x = "Semanas Epidemiológicas", col = "",
        title = )+
   scale_color_manual(values=c("blue3","red3"))+
-  scale_x_discrete(breaks = levels(factor(df_mun_miss$sem_not))[seq(1, length(levels(factor(df_mun_miss$sem_not))), by = 8)])+
   theme(axis.text.x = element_text(angle = 60,hjust = 1),
         axis.text  = element_text(colour = "black"),
-        legend.position = "top") #+
-  # facet_wrap(~arbo, ncol = 1) 
+        legend.position = "top") +
+   facet_wrap(~arbo, ncol = 1)
+
 
  ggsave("./plots/fig3.png",
-        fig3,dpi = 600,
-        width = 7, height = 5,
+        fig3,dpi = 300,
+        width = 7.5, height = 6,
         bg = "white")
-
+ 
+ 
 # FIGURA 4 
  
  ## MUNICIPIO 
 fig4 <- perda_notificação %>% 
+  filter(sem_not >= paste0(ano_atual-1,substr(weeks_2_plot[3],5,6))) %>% 
   ggplot() + 
   geom_line(aes(x=factor(sem_not), y = perca, group = 1, col = "Perdidos")) + 
   geom_line(aes(x=factor(sem_not), y = notificações, group = 1, col = "Notificações")) +
@@ -1499,29 +1551,25 @@ ggsave("./plots/fig5.png", fig5,
 
 # FIGURA 6
 
-fig6 <- ggarrange(
-  mun_plots$faixa_atividade_mun_dengon,
-  mun_plots$faixa_atividade_mun_chikon,
+fig6 <- mun_plots$jv_receptividade_climatica
+
+# FIGURA 7
+
+fig7 <- ggarrange(
+  mun_plots$comp_mun_anos_dengon,
+  mun_plots$comp_mun_anos_chikon,
   ncol = 1, 
   labels = letters[1:2]
 )
 
-ggsave("./plots/fig6.png", fig6,
-       width = 7, height = 8, dpi = 600, bg = "white")
-
-
-# FIGURA 7 
-
-fig7 <- mun_plots$jv_receptividade_climatica
-
 ggsave("./plots/fig7.png", fig7,
-       width = 7, height = 5, dpi = 600, bg = "white")
+       width = 7, height = 9, dpi = 600, bg = "white")
 
 # FIGURA 8
 
 fig8 <- ggarrange(
-  mun_plots$comp_mun_anos_dengon,
-  mun_plots$comp_mun_anos_chikon,
+  mun_plots$rt_mun_dengon,
+  mun_plots$rt_mun_chikon,
   ncol = 1, 
   labels = letters[1:2]
 )
@@ -1532,90 +1580,96 @@ ggsave("./plots/fig8.png", fig8,
 # FIGURA 9
 
 fig9 <- ggarrange(
-  mun_plots$rt_mun_dengon,
-  mun_plots$rt_mun_chikon,
-  ncol = 1, 
-  labels = letters[1:2]
-)
-
-ggsave("./plots/fig9.png", fig9,
-       width = 7, height = 9, dpi = 600, bg = "white")
-
-# FIGURA 10
-
-fig10 <- ggarrange(
-  jv_inc_distritos_dengon[[1]],
-  jv_inc_distritos_dengon[[2]],
-  jv_inc_distritos_dengon[[3]],
+  jv_inc_distritos_dengon[[1]] + ylim(0,500),
+  jv_inc_distritos_dengon[[2]] + ylim(0,500),
+  jv_inc_distritos_dengon[[3]] + ylim(0,500),
   ncol = 1
 )
 
-ggsave("./plots/fig10.png", fig10,
+ggsave("./plots/fig9.png", fig9,
        width = 7, height = 11, dpi = 600, bg = "white")
 
-# FIGURA 11
-fig11 <- distrito_plots$jv_map_distritos_dengon
+# FIGURA 10
+fig10 <- distrito_plots$jv_map_distritos_dengon
 
-ggsave("./plots/fig11.png", fig11,
+ggsave("./plots/fig10.png", fig10,
        width = 8, height = 9, dpi = 600, bg = "white")
 
-# FIGURA 12
-fig12 <- ggarrange(
+# FIGURA 11
+fig11 <- ggarrange(
   jv_inc_distritos_chikon[[1]],
   jv_inc_distritos_chikon[[2]],
   jv_inc_distritos_chikon[[3]],
   ncol = 1
 )
 
-ggsave("./plots/fig12.png", fig12,
+ggsave("./plots/fig11.png", fig11,
        width = 7, height = 11, dpi = 600, bg = "white")
 
+# FIGURA 12
+fig12 <- distrito_plots$jv_map_distritos_chikon
+
+ggsave("./plots/fig12.png", fig12,
+       width = 8, height = 9, dpi = 600, bg = "white")
+
 # FIGURA 13
-fig13 <- distrito_plots$jv_map_distritos_chikon
+
+fig13 <- ggplot() +
+  geom_rect(data = dados_api %>% 
+      filter(SE %in% as.numeric(ultimas_semanas)) %>% 
+      group_by(SE),
+            aes(xmin = as.numeric(factor(SE)) - 0.5, 
+                  xmax = as.numeric(factor(SE)) + 0.5, 
+                  ymin = -Inf, 
+                  ymax = Inf, 
+                  fill = tempmin >= 18), alpha = 0.7) +
+      scale_fill_manual(values = c("TRUE" = "steelblue", "FALSE" = "grey70"), guide = "none") +
+  geom_line(
+    data = dados_api %>% 
+      filter(SE %in% as.numeric(ultimas_semanas)) %>% 
+      group_by(SE) %>% 
+      summarise(tempmin = mean(tempmin)),
+    aes(x = factor(SE), y = tempmin, group = 1, col = "Município")
+  ) +
+  geom_line(
+    data = distrito_downsc %>% 
+      mutate(ano = as.numeric(substr(SE,1,4))) %>% 
+      filter(SE %in% ultimas_semanas),
+    aes(factor(SE), mean_pred, group = Distrito, color = Distrito)
+  ) +
+  geom_ribbon(
+    data = distrito_downsc %>% 
+      mutate(ano = as.numeric(substr(SE,1,4))) %>% 
+      filter(SE %in% ultimas_semanas),
+    aes(factor(SE),
+        ymin = mean_ll,
+        ymax = pred_ul, group = Distrito, fill = Distrito),
+    alpha = 0.2, show.legend = F
+  ) + 
+  geom_hline(aes(yintercept = 18), 
+             linewidth = 1, linetype = "dashed", show.legend = F, col = "red") +
+  scale_color_manual(values = c("blue","salmon","green3","orange2")) +
+  scale_y_continuous(
+    name = "Receptividade climática") +
+  theme_minimal() +
+  theme(
+    axis.title.y.right = element_text(color = "black"),
+    axis.text.y.right = element_text(color = "black"),
+    axis.title.y.left = element_text(color = "black"),
+    legend.position = "top",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  ) + 
+  labs(x = "Semanas Epidemiológicas", 
+       y = "Temp. Mínima",
+       title = "Distritos - últimas 5 semanas", 
+       color = "") +
+  scale_x_discrete(expand = c(0,0))
 
 ggsave("./plots/fig13.png", fig13,
-       width = 8, height = 9, dpi = 600, bg = "white")
+       width = 7, height = 5, dpi = 600, bg = "white")
+
 
 # FIGURA 14
-coluna_dengue <- ggarrange(
-  faixa_atividade_distritos$`Distrito Centro_dengue` + rremove("ylab") + rremove("xlab"),
-  faixa_atividade_distritos$`Distrito Norte_dengue` + rremove("ylab") + rremove("xlab"),
-  faixa_atividade_distritos$`Distrito Sul_dengue` + rremove("ylab") + rremove("xlab"),
-  nrow = 3,
-  labels = letters[1:3],  # Letras a, b, c
-  font.label = list(size = 12, face = "bold")
-) %>% 
-  annotate_figure(top = text_grob("Dengue", face = "bold", size = 14))
-
-coluna_chik <- ggarrange(
-  faixa_atividade_distritos$`Distrito Centro_chikon` + rremove("ylab") + rremove("xlab"),
-  faixa_atividade_distritos$`Distrito Norte_chikon` + rremove("ylab") + rremove("xlab"),
-  faixa_atividade_distritos$`Distrito Sul_chikon` + rremove("ylab") + rremove("xlab"),
-  nrow = 3,
-  labels = letters[4:6],  # Letras d, e, f
-  font.label = list(size = 12, face = "bold")
-) %>% 
-  annotate_figure(top = text_grob("Chikungunya", face = "bold", size = 14))
-
-
-fig14 <- ggarrange(
-  coluna_dengue, 
-  coluna_chik,
-  ncol = 2
-)
-
-fig14 <- annotate_figure(
-  fig14,
-  left = text_grob("Incidência (casos por 100.000 hab", rot = 90, size = 12),
-  bottom = text_grob("Semanas epidemiológicas", size = 12)
-)
-
-ggsave("./plots/fig14.png", fig14,
-       width = 8, height = 9, dpi = 600, bg = "white")
-
-# FIGURA 15
-
-
 comp_coluna_dengue <- ggarrange(
   comp_anos_distritos$`Distrito Centro_dengue` + rremove("ylab") + rremove("xlab"),
   comp_anos_distritos$`Distrito Norte_dengue` + rremove("ylab") + rremove("xlab"),
@@ -1637,82 +1691,82 @@ comp_coluna_chik <- ggarrange(
   annotate_figure(top = text_grob("Chikungunya", face = "bold", size = 14))
 
 
-fig15 <- ggarrange(
+fig14 <- ggarrange(
   comp_coluna_dengue, 
   comp_coluna_chik,
   ncol = 2
 )
 
-fig15 <- annotate_figure(
-  fig15,
+fig14 <- annotate_figure(
+  fig14,
   left = text_grob("Incidência (casos por 100.000 hab", rot = 90, size = 12),
   bottom = text_grob("Semanas epidemiológicas", size = 12)
 )
 
-ggsave("./plots/fig15.png", fig15,
+ggsave("./plots/fig14.png", fig14,
        width = 8, height = 9, dpi = 600, bg = "white")
+
+# FIGURA 15
+
+fig15 <- distrito_plots$rt_distrito_dengon
+
+ggsave("./plots/fig15.png", fig15,
+       width = 7, height = 6, dpi = 600, bg = "white")
 
 # FIGURA 16
 
-fig16 <- distrito_plots$rt_distrito_dengon
+fig16 <- distrito_plots$rt_distrito_chikon
 
 ggsave("./plots/fig16.png", fig16,
        width = 7, height = 6, dpi = 600, bg = "white")
 
 # FIGURA 17
-
-fig17 <- distrito_plots$rt_distrito_chikon
-
-ggsave("./plots/fig17.png", fig17,
-       width = 7, height = 6, dpi = 600, bg = "white")
-
-# FIGURA 18
-fig18 <- ggarrange(
+fig17 <- ggarrange(
   jv_inc_bairros_dengon[[1]],
   jv_inc_bairros_dengon[[2]],
   jv_inc_bairros_dengon[[3]],
   ncol = 1
 )
 
-ggsave("./plots/fig18.png", fig18,
+ggsave("./plots/fig17.png", fig17,
        width = 7, height = 11, dpi = 600, bg = "white")
 
-# FIGURA 19
-fig19 <- jv_map_bairros_dengon
+# FIGURA 18
+fig18 <- jv_map_bairros_dengon
 
-ggsave("./plots/fig19.png", fig19,
+ggsave("./plots/fig18.png", fig18,
        width = 9, height = 9, dpi = 600, bg = "white")
 
-# FIGURA 20
-fig20 <- ggarrange(
+# FIGURA 19
+fig19 <- ggarrange(
   jv_inc_bairros_chikon[[1]],
   jv_inc_bairros_chikon[[2]],
   jv_inc_bairros_chikon[[3]],
   ncol = 1
 )
 
-ggsave("./plots/fig20.png", fig20,
+ggsave("./plots/fig19.png", fig19,
        width = 7, height = 11, dpi = 600, bg = "white")
 
-# FIGURA 21
-fig21 <- jv_map_bairros_chikon
+# FIGURA 20
+fig20 <- jv_map_bairros_chikon
 
-ggsave("./plots/fig21.png", fig21,
+ggsave("./plots/fig20.png", fig20,
        width = 9, height = 9, dpi = 600, bg = "white")
 
 ```
 
-```{r, include=FALSE, cache=TRUE}
+```{r cache=FALSE, include=FALSE}
 
 # TABELA 1
 
 tab1_ok <- perda_notificação %>% 
   filter(sem_not %in% weeks_2_plot) %>% 
-  arrange(arbo) %>% 
+  arrange(desc(sem_not),arbo) %>% 
   ungroup() %>% 
   select(sem_not,arbo,notificações,perca,pct_perca) %>% 
   mutate(pct_perca = round(pct_perca,2)) %>% 
-  gt() %>% 
+  gt(groupname_col = "arbo") %>% 
   cols_label(
     sem_not = "SE",
     arbo = "Arbovirose",
@@ -1732,92 +1786,7 @@ tab1_ok <- perda_notificação %>%
   ) 
 
 # TABELA 2
-
-# DENGON
-casos_acumulado_atual_dengon <- dados_api %>%
-  mutate(ano = as.numeric(substr(SE,1,4)),
-         ew = substr(SE, 5,6)) %>% 
-  filter(arbo == "dengue" & ano == ano_atual &
-           ew %in% c(1: substr(weeks_2_plot[3],5,6))) %>% 
-  pull(casos) %>% sum()
-
-casos_acumulado_passado_dengon <- dados_api %>% 
-   mutate(ano = as.numeric(substr(SE,1,4)),
-         ew = substr(SE, 5,6)) %>% 
-  filter(arbo == "dengue" & ano == ano_atual - 1 &
-           ew %in% c(1: substr(weeks_2_plot[3],5,6))) %>% 
-  pull(casos) %>% sum()
-
-
-tab2_dengon <- data.frame(
-  arbo = "dengue",
-  casos_acumulados = casos_acumulado_atual_dengon,
-  incidencia_acumulada = round(casos_acumulado_atual_dengon/616317 * 1e5,1),
-  prop_atual_passado = (round(casos_acumulado_atual_dengon/casos_acumulado_passado_dengon,3))*100
-)
-  
-# CHIKON
-
-casos_acumulado_atual_chikon <- dados_api %>% 
-   mutate(ano = as.numeric(substr(SE,1,4)),
-         ew = substr(SE, 5,6)) %>% 
-  filter(arbo == "chikon" & ano == ano_atual &
-           ew %in% c(1: substr(weeks_2_plot[3],5,6))) %>% 
-  pull(casos) %>% sum()
-
-
-casos_acumulado_passado_chikon <- dados_api %>% 
-   mutate(ano = as.numeric(substr(SE,1,4)),
-         ew = substr(SE, 5,6))  %>% 
-  filter(arbo == "chikon" & ano == ano_atual - 1 &
-           ew %in% c(1: substr(weeks_2_plot[3],5,6))) %>% 
-  pull(casos) %>% sum()
-
-
-tab2_chikon <- data.frame(
-  arbo = "chikungunya",
-  casos_acumulados = casos_acumulado_atual_chikon,
-  incidencia_acumulada = round(casos_acumulado_atual_chikon/616317 * 1e5,1),
-  prop_atual_passado = (round(casos_acumulado_atual_chikon/casos_acumulado_passado_chikon,3))*100
-)
-
-  
-tab2 <- rbind(tab2_dengon,
-              tab2_chikon)
-
-tab2_ok <- tab2 %>%
-  gt() %>%
-  fmt_number(columns = c(casos_acumulados, incidencia_acumulada, prop_atual_passado), decimals = 0) %>%
-  text_transform(
-    locations = cells_body(columns = prop_atual_passado),
-    fn = function(x) {
-      prop <- as.numeric(x)
-      case_when(
-        prop >= 100 ~ paste(x, "<span style='color:red;font-size:30px;'>↑</span>"),
-        prop < 100 ~ paste(x, "<span style='color:green;font-size:30px;'>↓</span>"),
-        TRUE ~ x
-      )
-    }
-  ) %>%
-  cols_label(
-    arbo = "Arbovirose",
-    casos_acumulados = html(paste0("Casos acumulados<br>até ", weeks_2_plot[3])),
-    incidencia_acumulada = html("Incidência acumulada<br>(por 100 mil hab.)"),
-    prop_atual_passado = html("Variação<br>(%)")
-  ) %>%
-  tab_options(
-    table.font.size = "14px"
-  ) %>%
-   tab_style(
-    style = cell_text(align = "center", v_align = "middle"),
-    locations = list(
-      cells_body(),
-      cells_column_labels()
-    )
-  )
-
-# TABELA 3
-tab3_dengon <- dados_api %>% 
+tab2_dengon <- dados_api %>% 
   filter(arbo == "dengue" & SE %in% weeks_2_plot) %>% 
   left_join(jv_mun_nowscat$mun_nowcast %>% 
               select(ano_epi,Median) %>% 
@@ -1833,9 +1802,31 @@ tab3_dengon <- dados_api %>%
          nivel == 3 ~ "laranja",
          nivel == 4 ~ "vermelho"),
          p_inc100k = round(p_inc100k,1)) %>% 
-  select(arbo, SE, casos, Median, p_inc100k, receptivo, nivel)  
+  select(arbo, SE, casos, Median, p_inc100k, receptivo, nivel)
 
-tab3_chikon <- dados_api %>% 
+casos_acumulado_municipio_dengon_ultimasSE <- 
+  dados_api %>% 
+  filter(substr(SE,1,4) == ano_atual & arbo == "dengue") %>% 
+  select(SE, casos) %>%
+  arrange(SE) %>%  # Ordenar por semana epidemiológica
+  mutate(acumulado = cumsum(casos)) %>% 
+  filter(SE %in% weeks_2_plot) %>% 
+  mutate(arbo = "dengue") %>% 
+  arrange(desc(SE))
+
+casos_acumulado_municipio_chikon_ultimasSE <- 
+  dados_api %>% 
+  filter(substr(SE,1,4) == ano_atual & arbo == "chikon") %>% 
+  select(SE, casos) %>%
+  arrange(SE) %>%  # Ordenar por semana epidemiológica
+  mutate(acumulado = cumsum(casos)) %>% 
+  filter(SE %in% weeks_2_plot) %>% 
+  mutate(arbo = "chikungunya") %>% 
+  arrange(desc(SE))
+      
+      
+
+tab2_chikon <- dados_api %>% 
   filter(arbo == "chikon" & SE %in% weeks_2_plot) %>% 
   # left_join(jv_mun_nowscat$mun_nowcast %>% 
   #             select(ano_epi,Median) %>% 
@@ -1854,18 +1845,21 @@ tab3_chikon <- dados_api %>%
          p_inc100k = round(p_inc100k,1)) %>% 
   select(arbo, SE, casos, Median, p_inc100k, receptivo, nivel)  
 
-tab3 <- rbind(tab3_dengon,
-              tab3_chikon)
 
-tab3_ok <- tab3 %>%
-  gt() %>%
+tab2 <- rbind(tab2_dengon,tab2_chikon) %>% 
+  mutate(acumulado = c(casos_acumulado_municipio_dengon_ultimasSE$acumulado,
+                           casos_acumulado_municipio_chikon_ultimasSE$acumulado)) %>% 
+  select(SE,arbo,acumulado,casos,Median,p_inc100k,nivel)
+
+tab2_ok <- tab2 %>%
+  gt(groupname_col = "arbo") %>%
   fmt_number(columns = c(casos, Median, p_inc100k), decimals = 0) %>%
   cols_label(
     arbo = "Arbovirose",
+    acumulado = "Casos acumulados",
     casos = "Casos notificados",
     Median = "Casos estimados",
     p_inc100k = "Incidência (por 100 mill hab.)",
-    receptivo = "Receptividade",
     nivel = "Nível"
   ) %>%
   tab_options(
@@ -1905,295 +1899,16 @@ tab3_ok <- tab3 %>%
   tab_header(title = md(""),
               subtitle = md(""))
 
-# TABELA 4
-# DENGON
-recep_passado_dengon <- dados_api %>% 
-   mutate(ano = as.numeric(substr(SE,1,4)),
-         ew = substr(SE, 5,6)) %>% 
-  filter(arbo == "dengue" & ano == ano_atual-1 & 
-           ew %in% c(1: substr(weeks_2_plot[3],5,6))) %>% 
-  pull(receptivo) %>% sum()
-
-recep_atual_dengon <- dados_api %>% 
-   mutate(ano = as.numeric(substr(SE,1,4)),
-         ew = substr(SE, 5,6)) %>% 
-  filter(arbo == "dengue" & ano == ano_atual & 
-           ew %in% c(1: substr(weeks_2_plot[3],5,6))) %>% 
-  pull(receptivo) %>% sum()
-
-trans_atual_dengon <- dados_api %>% 
-   mutate(ano = as.numeric(substr(SE,1,4)),
-         ew = substr(SE, 5,6)) %>% 
-  filter(arbo == "dengue" & ano == ano_atual & 
-           ew %in% c(1: substr(weeks_2_plot[3],5,6)) &
-           Rt >= 1) %>% 
-  pull(Rt) %>% n_distinct()
-
-trans_passado_dengon <- dados_api %>% 
-   mutate(ano = as.numeric(substr(SE,1,4)),
-         ew = substr(SE, 5,6)) %>% 
-  filter(arbo == "dengue" & ano == ano_atual-1 & 
-           ew %in% c(1: substr(weeks_2_plot[3],5,6)) &
-           Rt >= 1) %>% 
-  pull(Rt) %>% n_distinct()
-
-week_atual_dengon <- dados_api %>% 
-     mutate(ano = as.numeric(substr(SE,1,4)),
-         ew = substr(SE, 5,6)) %>% 
-  filter(arbo == "dengue" & ano == ano_atual &
-           ew == substr(weeks_2_plot[3],5,6)) %>% 
-  pull(casos)
-
-week_passado_dengon <- dados_api %>% 
-       mutate(ano = as.numeric(substr(SE,1,4)),
-         ew = substr(SE, 5,6)) %>% 
-  filter(arbo == "dengue" & ano == ano_atual-1 &
-           ew == substr(weeks_2_plot[3],5,6)) %>% 
-  pull(casos)
-
-
-tab4_dengon <- data.frame(
-  arbo = "dengue",
-  comp = week_atual_dengon/week_passado_dengon,
-  recep_2024 = recep_passado_dengon,
-  recep_2025 = recep_atual_dengon,
-  trans_2024 = trans_passado_dengon,
-  trans_2025 = trans_atual_dengon
-) %>% 
-  mutate(comp = case_when(
-    comp <= 1 ~ "redução",
-    TRUE ~ "aumento"
-  ))
-
-# CHIKON
-recep_passado_chikon <- dados_api %>% 
-   mutate(ano = as.numeric(substr(SE,1,4)),
-         ew = substr(SE, 5,6)) %>% 
-  filter(arbo == "chikon" & ano == ano_atual-1 & 
-           ew %in% c(1: substr(weeks_2_plot[3],5,6))) %>% 
-  pull(receptivo) %>% sum()
-
-recep_atual_chikon <- dados_api %>% 
-   mutate(ano = as.numeric(substr(SE,1,4)),
-         ew = substr(SE, 5,6)) %>% 
-  filter(arbo == "chikon" & ano == ano_atual & 
-           ew %in% c(1: substr(weeks_2_plot[3],5,6))) %>% 
-  pull(receptivo) %>% sum()
-
-trans_atual_chikon <- dados_api %>% 
-   mutate(ano = as.numeric(substr(SE,1,4)),
-         ew = substr(SE, 5,6)) %>% 
-  filter(arbo == "chikon" & ano == ano_atual & 
-           ew %in% c(1: substr(weeks_2_plot[3],5,6)) &
-           Rt >= 1) %>% 
-  pull(Rt) %>% n_distinct()
-
-trans_passado_chikon <- dados_api %>% 
-   mutate(ano = as.numeric(substr(SE,1,4)),
-         ew = substr(SE, 5,6)) %>% 
-  filter(arbo == "chikon" & ano == ano_atual-1 & 
-           ew %in% c(1: substr(weeks_2_plot[3],5,6)) &
-           Rt >= 1) %>% 
-  pull(Rt) %>% n_distinct()
-
-week_atual_chikon <- dados_api %>% 
-     mutate(ano = as.numeric(substr(SE,1,4)),
-         ew = substr(SE, 5,6)) %>% 
-  filter(arbo == "chikon" & ano == ano_atual &
-           ew == substr(weeks_2_plot[3],5,6)) %>% 
-  pull(casos)
-
-week_passado_chikon <- dados_api %>% 
-       mutate(ano = as.numeric(substr(SE,1,4)),
-         ew = substr(SE, 5,6)) %>% 
-  filter(arbo == "chikon" & ano == ano_atual-1 &
-           ew == substr(weeks_2_plot[3],5,6)) %>% 
-  pull(casos)
-
-tab4_chikon <- data.frame(
-  arbo = "chikungunya",
-  comp = 0,#ifelse(week_passado_chikon, 0, week_atual_chikon/week_passado_chikon), ## MUDAR AQUI
-  recep_2024 = recep_passado_chikon,
-  recep_2025 = recep_atual_chikon,
-  trans_2024 = trans_passado_chikon,
-  trans_2025 = trans_atual_chikon
-) %>% 
-  mutate(comp = case_when(
-    comp <= 1 ~ "redução",
-    is.na(comp) ~ "redução",
-    TRUE ~ "aumento"
-  ))
-
-tab4 <- rbind(tab4_dengon,
-              tab4_chikon)
-
-tab4_ok <- tab4 %>%
-  gt() %>%
-  # ---- Títulos superiores para grupos de colunas ----
-  tab_spanner(
-    label = "Condições favoráveis à transmissão",
-    columns = c(recep_2024, recep_2025)
-  ) %>%
-  tab_spanner(
-    label = "Transmissão efetiva",
-    columns = c(trans_2024, trans_2025)
-  ) %>%
+# TABELA 3
+casos_acumulados_distrito_dengon <- df_distritos %>% 
+  filter(substr(sem_not, 1, 4) == ano_atual & arbo == "dengue") %>% 
+  select(sem_not, casos, distrito) %>%
+  arrange(sem_not, distrito) %>%  
+  group_by(distrito) %>%  # Agrupa por distrito
+  mutate(acumulado = cumsum(casos)) %>% 
+  filter(sem_not %in% weeks_2_plot) %>% 
+  arrange(distrito,desc(sem_not))
   
-  # ---- Rótulos das colunas ----
-  cols_label(
-    arbo = "Arbovirose",
-    comp = "Tendência",
-    recep_2024 = "2024",
-    recep_2025 = "2025",
-    trans_2024 = "2024",
-    trans_2025 = "2025"
-  ) %>%
-  
-  # ---- Seta condicional na coluna 'comp' ----
-  text_transform(
-    locations = cells_body(columns = comp),
-    fn = function(x) {
-      case_when(
-        x == "redução" ~ paste(x, "<span style='color:green; font-size:30px;'>↓</span>"),
-        x == "aumento" ~ paste(x, "<span style='color:red; font-size:30px;'>↑</span>"),
-        TRUE ~ x
-      )
-    }
-  ) %>%
-  
-  # ---- Estilos ----
-  tab_style(
-    style = cell_text(align = "center", v_align = "middle"),
-    locations = list(
-      cells_body(),
-      cells_column_labels(),
-      cells_column_spanners()
-    )
-  ) %>%
-  tab_options(
-    table.font.size = "14px"#,
-   # column_labels.font.weight = "bold"
-  ) %>% 
-  tab_header(title = md(""),
-              subtitle = md(""))
-
-# TABELA 5
-tab5 <- data.frame(
-  faixa = c("baixa","média","alta"),
-  limiar = c("Incidência menor que 7,12",
-            "Incidência entre 7,12 e 72,46",
-            "Incidência maior que 72,46")
-)
-
-
-tab5_ok <- tab5 %>% ungroup() %>% 
-  gt() %>%
-  #fmt_number(columns = c(casos_notificados, Median, inc), decimals = 0) %>%
-  cols_label(
-    faixa = "Faixa de atividade",
-    limiar = "Limiar epidêmico"
-  ) %>%
-  tab_options(
-    table.font.size = "14px"
-  ) %>% 
-   tab_style(
-    style = cell_text(align = "center", v_align = "middle"),  
-    locations = list(
-      cells_body(),          
-      cells_column_labels()  
-    )
-  ) %>% 
-   tab_style(
-    style = cell_text(color = "green", weight = "bold"),
-    locations = cells_body(
-      columns = faixa,
-      rows = faixa == "baixa")
-  ) %>%
-  tab_style(
-    style = cell_text(color = "gold", weight = "bold"),
-    locations = cells_body(
-      columns = faixa,
-      rows = faixa == "média")
-  ) %>%
-  tab_style(
-    style = cell_text(color = "red", weight = "bold"),
-    locations = cells_body(
-      columns = faixa,
-      rows = faixa == "alta")
-  ) %>% 
-  tab_header(title = md(""),
-              subtitle = md(""))
-
-# TABELA 6
-casos_acumulado_passado_distrito_dengon <- df_distritos %>% 
-  mutate(ew = substr(sem_not,5,6)) %>%
-  filter(arbo == "dengue" &
-           ano == ano_atual - 1  &
-           ew %in% 1:substr(weeks_2_plot[3],5,6)) %>%
-  group_by(distrito) %>% 
-  summarise(casos_passado = sum(casos))
-
-tab6 <- df_distritos %>% 
-  mutate(ew = substr(sem_not,5,6)) %>%
-  filter(arbo == "dengue" &
-           ano == ano_atual &
-           ew %in% 1:substr(weeks_2_plot[3],5,6)) %>%
-  group_by(distrito) %>% 
-  summarise(casos = sum(casos)) %>% 
-  left_join(casos_acumulado_passado_distrito_dengon) %>% 
-  mutate(pop = populacoes_distritos,
-         inc = casos/pop * 1e5,
-         comp = casos/casos_passado) %>% 
-  select(distrito,casos,inc,comp)
-
-
-
-tab6_ok <- tab6 %>%
-  mutate(comp = (round(comp,3)*100)) %>% 
-  gt() %>%
-  fmt_number(columns = c(casos, inc), decimals = 0) %>%
-  text_transform(
-    locations = cells_body(columns = comp),
-    fn = function(x) {
-      # Converter para numérico
-      prop <- as.numeric(x)
-      
-      # Aplicar condições
-      case_when(
-        prop >= 100 ~ paste(x, "<span style='color:red;font-size:30px;'>↑</span>"),
-        prop < 100 ~ paste(x, "<span style='color:green;font-size:30px;'>↓</span>"),
-        TRUE ~ x
-      )
-    }
-  ) %>%
-  cols_label(
-    distrito = "Distrito",
-    casos = html(paste0("Casos acumulados<br>até ", weeks_2_plot[3])),
-    inc = html("Incidência acumulada<br>(por 100 mil hab.)"),
-    comp = html("Variação<br>(%)")
-  ) %>%
-  tab_options(
-    table.font.size = "14px"
-  ) %>% 
-   tab_style(
-    style = cell_text(align = "center", v_align = "middle"),  
-    locations = list(
-      cells_body(),          
-      cells_column_labels()  
-    )
-  ) %>% 
-  tab_header(title = md("dengue"),
-              subtitle = md(""))
-
-
-# TABELA 7
-casos_acumulado_passado_distrito_dengon <- df_distritos %>% 
-  #mutate(ew = substr(sem_not,5,6)) %>%
-  filter(arbo == "dengue" &
-           ano == ano_atual  &
-           sem_not %in% weeks_2_plot) %>%
-  group_by(sem_not,distrito) %>% 
-  summarise(casos_passado = sum(casos))
 
 distritoCentro_estimados_dengon <- jv_distritos_nowcast$`Distrito Centro`$nowcast$total %>% 
   filter(ano_epi %in% weeks_2_plot) %>% 
@@ -2218,8 +1933,7 @@ distritos_estimados_dengon <- rbind(
   
 )
 
-
-tab7 <- df_distritos %>% 
+tab3 <- df_distritos %>% 
   #mutate(ew = substr(sem_not,5,6)) %>%
   filter(arbo == "dengue" &
            ano == ano_atual  &
@@ -2242,14 +1956,18 @@ tab7 <- df_distritos %>%
     ),
     sem_not = as.numeric(as.character(sem_not)),
     distrito = factor(distrito)
-  )
+  ) %>% 
+  left_join(casos_acumulados_distrito_dengon %>% 
+              select(sem_not, distrito, acumulado)) %>% 
+  select(sem_not, acumulado, casos_notificados, Median, inc, nivel, distrito)
   
-tab7_ok <- tab7 %>% ungroup() %>% 
-  arrange(sem_not,distrito) %>% 
-  gt() %>%
+tab3_ok <- tab3 %>% ungroup() %>% 
+  arrange(desc(sem_not)) %>% 
+  gt(groupname_col = "distrito") %>%
   #fmt_number(columns = c(casos_notificados, Median, inc), decimals = 0) %>%
   cols_label(
     sem_not = "SE",
+    acumulado = "Casos acumulados",
     casos_notificados = "Casos notificados",
     distrito = "Distrito",
     Median = "Casos estimados",
@@ -2293,154 +2011,97 @@ tab7_ok <- tab7 %>% ungroup() %>%
   tab_header(title = md(""),
               subtitle = md(""))
 
-# TABELA 8 PRECISA DOS DADOS DE CHIKON PARA RODAR
-# casos_acumulado_passado_distrito_chikon <- df_distritos %>% 
-#   mutate(ew = substr(sem_not,5,6)) %>%
-#   filter(arbo == "chikon" &
-#            ano == ano_atual - 1  &
-#            ew %in% 1:substr(weeks_2_plot[3],5,6)) %>%
-#   group_by(distrito) %>% 
-#   summarise(casos_passado = sum(casos))
-# 
-# tab8 <- df_distritos %>% 
-#   mutate(ew = substr(sem_not,5,6)) %>%
-#   filter(arbo == "chikon" &
-#            ano == ano_atual &
-#            ew %in% 1:substr(weeks_2_plot[3],5,6)) %>%
-#   group_by(distrito) %>% 
-#   summarise(casos = sum(casos)) %>% 
-#   left_join(casos_acumulado_passado_distrito_chikon) %>% 
-#   mutate(pop = populacoes_distritos,
-#          inc = casos/pop * 1e5,
-#          comp = casos/casos_passado) %>% 
-#   select(distrito,casos,inc,comp)
-# 
-# 
-# 
-# tab8_ok <- tab8 %>%
-#   mutate(comp = (round(comp,3)*100)) %>% 
-#   gt() %>%
-#   fmt_number(columns = c(casos, inc), decimals = 0) %>%
-#   text_transform(
-#     locations = cells_body(columns = comp),
-#     fn = function(x) {
-#       # Converter para numérico
-#       prop <- as.numeric(x)
-#       
-#       # Aplicar condições
-#       case_when(
-#         prop >= 100 ~ paste(x, "<span style='color:red;font-size:30px;'>↑</span>"),
-#         prop <= 100 ~ paste(x, "<span style='color:green;font-size:30px;'>↓</span>"),
-#         TRUE ~ x
-#       )
-#     }
-#   ) %>%
-#   cols_label(
-#     distrito = "Distrito",
-#     casos = html(paste0("Casos acumulados<br>até ", weeks_2_plot[3])),
-#     inc = html("Incidência acumulada<br>(por 100 mil hab.)"),
-#     comp = html("Variação<br>(%)")
-#   ) %>%
-#   tab_options(
-#     table.font.size = "14px"
-#   ) %>% 
-#    tab_style(
-#     style = cell_text(align = "center", v_align = "middle"),  
-#     locations = list(
-#       cells_body(),          
-#       cells_column_labels()  
-#     )
-#   ) %>% 
-#   tab_header(title = md("chikungunya"),
-#               subtitle = md(""))
-# 
-# # TABELA 9 ## PRECISA DOS DADOS DE CHIKON
-# 
-# casos_acumulado_passado_distrito_chikon <- df_distritos %>% 
-#   #mutate(ew = substr(sem_not,5,6)) %>%
-#   filter(arbo == "chikon" &
-#            ano == ano_atual  &
-#            sem_not %in% weeks_2_plot) %>%
-#   group_by(sem_not,distrito) %>% 
-#   summarise(casos_passado = sum(casos))
-# 
-# 
-# tab9 <- df_distritos %>% 
-#   #mutate(ew = substr(sem_not,5,6)) %>%
-#   filter(arbo == "chikon" &
-#            ano == ano_atual  &
-#            sem_not %in% weeks_2_plot) %>%
-#   group_by(sem_not,distrito) %>% arrange(desc(sem_not)) %>% 
-#   summarise(casos_notificados = sum(casos),
-#             nivel = sum(nivel))  %>% 
-#   mutate(pop = populacoes_distritos,
-#          inc = casos_notificados/pop * 1e5) %>% 
-#   # left_join(distritos_estimados_dengon %>% 
-#   #             mutate(ano_epi= as.numeric(ano_epi)),
-#   #           by = c("sem_not" = "ano_epi", "distrito")) %>% 
-#   select(sem_not,distrito,casos_notificados,inc,nivel) %>% 
-#   mutate(
-#     nivel = case_when(
-#       nivel == 1 ~ "verde",
-#       nivel == 2 ~ "amarelo",
-#       nivel == 3 ~ "laranja",
-#       nivel == 4 ~ "vermelho"
-#     ),
-#     sem_not = as.numeric(as.character(sem_not)),
-#     distrito = factor(distrito)
-#   )
-#   
-# tab9_ok <- tab9 %>% ungroup() %>% 
-#   arrange(sem_not,distrito) %>% 
-#   gt() %>%
-#   #fmt_number(columns = c(casos_notificados, Median, inc), decimals = 0) %>%
-#   cols_label(
-#     sem_not = "SE",
-#     casos_notificados = "Casos notificados",
-#     distrito = "Distrito",
-#     inc = "Incidência",
-#     nivel = "Nível"
-#   ) %>%
-#   tab_options(
-#     table.font.size = "14px"
-#   ) %>% 
-#    tab_style(
-#     style = cell_text(align = "center", v_align = "middle"),  
-#     locations = list(
-#       cells_body(),          
-#       cells_column_labels()  
-#     )
-#   ) %>% 
-#    tab_style(
-#     style = cell_text(color = "green", weight = "bold"),
-#     locations = cells_body(
-#       columns = nivel,
-#       rows = nivel == "verde")
-#   ) %>%
-#   tab_style(
-#     style = cell_text(color = "gold", weight = "bold"),
-#     locations = cells_body(
-#       columns = nivel,
-#       rows = nivel == "amarelo")
-#   ) %>%
-#   tab_style(
-#     style = cell_text(color = "darkorange", weight = "bold"),
-#     locations = cells_body(
-#       columns = nivel,
-#       rows = nivel == "laranja")
-#   ) %>%
-#   tab_style(
-#     style = cell_text(color = "red", weight = "bold"),
-#     locations = cells_body(
-#       columns = nivel,
-#       rows = nivel == "vermelho")
-#   ) %>% 
-#   tab_header(title = md(""),
-#               subtitle = md(""))
+# TABELA 4 
+casos_acumulados_distrito_chikon <- df_distritos %>% 
+  filter(substr(sem_not, 1, 4) == ano_atual & arbo == "chikon") %>% 
+  select(sem_not, casos, distrito) %>%
+  arrange(sem_not, distrito) %>%  
+  group_by(distrito) %>%  # Agrupa por distrito
+  mutate(acumulado = cumsum(casos)) %>% 
+  filter(sem_not %in% weeks_2_plot) %>% 
+  arrange(distrito,desc(sem_not))
 
-# TABELA 10
 
-tab10 <- bairros_ultima_semana_dengue %>% 
+tab4 <- df_distritos %>%
+  #mutate(ew = substr(sem_not,5,6)) %>%
+  filter(arbo == "chikon" &
+           ano == ano_atual  &
+           sem_not %in% weeks_2_plot) %>%
+  group_by(sem_not,distrito) %>% arrange(desc(sem_not)) %>%
+  summarise(casos_notificados = sum(casos),
+            nivel = sum(nivel))  %>%
+  mutate(pop = populacoes_distritos,
+         inc = casos_notificados/pop * 1e5) %>%
+  # left_join(distritos_estimados_dengon %>%
+  #             mutate(ano_epi= as.numeric(ano_epi)),
+  #           by = c("sem_not" = "ano_epi", "distrito")) %>%
+  select(sem_not,distrito,casos_notificados,inc,nivel) %>%
+  mutate(
+    nivel = case_when(
+      nivel == 1 ~ "verde",
+      nivel == 2 ~ "amarelo",
+      nivel == 3 ~ "laranja",
+      nivel == 4 ~ "vermelho"
+    ),
+    sem_not = as.numeric(as.character(sem_not)),
+    distrito = factor(distrito)
+  ) %>% 
+  left_join(casos_acumulados_distrito_chikon %>% 
+              select(sem_not, distrito, acumulado)) %>% 
+  select(sem_not, acumulado, casos_notificados, inc, nivel, distrito)
+
+tab4_ok <- tab4 %>% ungroup() %>%
+  arrange(desc(sem_not)) %>%
+  gt(groupname_col = "distrito") %>%
+  #fmt_number(columns = c(casos_notificados, Median, inc), decimals = 0) %>%
+  cols_label(
+    sem_not = "SE",
+    acumulado = "Casos acumulados",
+    casos_notificados = "Casos notificados",
+    distrito = "Distrito",
+    inc = "Incidência",
+    nivel = "Nível"
+  ) %>%
+  tab_options(
+    table.font.size = "14px"
+  ) %>%
+   tab_style(
+    style = cell_text(align = "center", v_align = "middle"),
+    locations = list(
+      cells_body(),
+      cells_column_labels()
+    )
+  ) %>%
+   tab_style(
+    style = cell_text(color = "green", weight = "bold"),
+    locations = cells_body(
+      columns = nivel,
+      rows = nivel == "verde")
+  ) %>%
+  tab_style(
+    style = cell_text(color = "gold", weight = "bold"),
+    locations = cells_body(
+      columns = nivel,
+      rows = nivel == "amarelo")
+  ) %>%
+  tab_style(
+    style = cell_text(color = "darkorange", weight = "bold"),
+    locations = cells_body(
+      columns = nivel,
+      rows = nivel == "laranja")
+  ) %>%
+  tab_style(
+    style = cell_text(color = "red", weight = "bold"),
+    locations = cells_body(
+      columns = nivel,
+      rows = nivel == "vermelho")
+  ) %>%
+  tab_header(title = md(""),
+              subtitle = md(""))
+
+# TABELA 5
+
+tab5 <- bairros_ultima_semana_dengue %>% 
   mutate(
     inc = round(inc,1),
     Rt = round(Rt,1),
@@ -2452,8 +2113,8 @@ tab10 <- bairros_ultima_semana_dengue %>%
     )
   ) %>% arrange(desc(inc))
 
-tab10_ok <- tab10 %>% ungroup() %>% 
-  gt() %>%
+tab5_ok <- tab5 %>% ungroup() %>% 
+  gt(groupname_col = "distrito") %>%
   #fmt_number(columns = c(casos_notificados, Median, inc), decimals = 0) %>%
   cols_label(
     nm_bairro_ref = "Bairro",
@@ -2501,74 +2162,80 @@ tab10_ok <- tab10 %>% ungroup() %>%
               subtitle = md(""))
   
 
-# TABELA 11 PRECISAR DOS DADOS DE CHIK
+# TABELA 6
 
-# tab11 <- bairros_ultima_semana_chikon %>% 
-#   mutate(
-#     inc = round(inc,1),
-#     Rt = round(Rt,1),
-#     nivel = case_when(
-#       nivel == 1 ~ "verde",
-#       nivel == 2 ~ "amarelo",
-#       nivel == 3 ~ "laranja",
-#       nivel == 4 ~ "vermelho"
-#     )
-#   ) %>% arrange(desc(inc))
-# 
-# tab11_ok <- tab11 %>% ungroup() %>% 
-#   gt() %>%
-#   #fmt_number(columns = c(casos_notificados, Median, inc), decimals = 0) %>%
-#   cols_label(
-#     nm_bairro_ref = "Bairro",
-#     casos = "Casos notificados",
-#     distrito = "Distrito",
-#     inc = "Incidência",
-#     nivel = "Nível",
-#     semanas_com_nivel3_4 = html("Semanas com nível crítico<br>(janela de 5 últimas semanas)")
-#   ) %>%
-#   tab_options(
-#     table.font.size = "14px"
-#   ) %>% 
-#    tab_style(
-#     style = cell_text(align = "center", v_align = "middle"),  
-#     locations = list(
-#       cells_body(),          
-#       cells_column_labels()  
-#     )
-#   ) %>% 
-#    tab_style(
-#     style = cell_text(color = "green", weight = "bold"),
-#     locations = cells_body(
-#       columns = nivel,
-#       rows = nivel == "verde")
-#   ) %>%
-#   tab_style(
-#     style = cell_text(color = "gold", weight = "bold"),
-#     locations = cells_body(
-#       columns = nivel,
-#       rows = nivel == "amarelo")
-#   ) %>%
-#   tab_style(
-#     style = cell_text(color = "darkorange", weight = "bold"),
-#     locations = cells_body(
-#       columns = nivel,
-#       rows = nivel == "laranja")
-#   ) %>%
-#   tab_style(
-#     style = cell_text(color = "red", weight = "bold"),
-#     locations = cells_body(
-#       columns = nivel,
-#       rows = nivel == "vermelho")
-#   ) %>% 
-#   tab_header(title = md("chikungunya"),
-#               subtitle = md(""))
+tab6 <- bairros_ultima_semana_chikon %>%
+  mutate(
+    inc = round(inc,1),
+    Rt = round(Rt,1),
+    nivel = case_when(
+      nivel == 1 ~ "verde",
+      nivel == 2 ~ "amarelo",
+      nivel == 3 ~ "laranja",
+      nivel == 4 ~ "vermelho"
+    )
+  ) %>% arrange(desc(inc))
+
+tab6_ok <- tab6 %>% ungroup() %>%
+  gt(groupname_col = "distrito") %>%
+  #fmt_number(columns = c(casos_notificados, Median, inc), decimals = 0) %>%
+  cols_label(
+    nm_bairro_ref = "Bairro",
+    casos = "Casos notificados",
+    distrito = "Distrito",
+    inc = "Incidência",
+    nivel = "Nível",
+    semanas_com_nivel3_4 = html("Semanas com nível crítico<br>(janela de 5 últimas semanas)")
+  ) %>%
+  tab_options(
+    table.font.size = "14px"
+  ) %>%
+   tab_style(
+    style = cell_text(align = "center", v_align = "middle"),
+    locations = list(
+      cells_body(),
+      cells_column_labels()
+    )
+  ) %>%
+   tab_style(
+    style = cell_text(color = "green", weight = "bold"),
+    locations = cells_body(
+      columns = nivel,
+      rows = nivel == "verde")
+  ) %>%
+  tab_style(
+    style = cell_text(color = "gold", weight = "bold"),
+    locations = cells_body(
+      columns = nivel,
+      rows = nivel == "amarelo")
+  ) %>%
+  tab_style(
+    style = cell_text(color = "darkorange", weight = "bold"),
+    locations = cells_body(
+      columns = nivel,
+      rows = nivel == "laranja")
+  ) %>%
+  tab_style(
+    style = cell_text(color = "red", weight = "bold"),
+    locations = cells_body(
+      columns = nivel,
+      rows = nivel == "vermelho")
+  ) %>%
+  tab_header(title = md("chikungunya"),
+              subtitle = md(""))
 
 ```
 
 ```{r, objetos_texto, include=FALSE}
+casos_acumulado_atual_dengon <- dados_api %>% 
+  filter(substr(SE,1,4) == ano_atual) %>% 
+  pull(casos) %>% sum()
+
+
 inc_acumulado_dengon <- round(casos_acumulado_atual_dengon/616317*1e5,1)
 week_atual <- paste0("SE", substr(weeks_2_plot[3],5,6))
 
+ultimas_3_semanas <- paste0("SE","",as.character((substr(weeks_2_plot,5,6))))
 ```
 
 # Joinville - SC
@@ -2591,247 +2258,227 @@ fig2
 
 Para a realização das análises foram utilizados os dados do SINAN Online agregados em três níveis: municipal, distrito de saúde e bairro. A agregação dos casos por bairro utilizou a variável “NM_BAIRRO”, pois esta apresentou a maior completude (superior ou igual a 70%) durante o processo de avaliação prévia dos dados (Figuras 3). Primeiramente foi realizada padronização dos nomes devido a diferentes grafias ou erros de escrita e remoção das notificações as quais os nomes dos bairros divergiam muito da grafia oficial ou que não constavam da lista dos 43 bairros oficiais. Além disso, para correta agregação dos casos por bairro também foram utilizados os arquivos shapefile dos bairros e distritos, dados populacionais para bairros e a listagem do nome dos bairros padronizada e correta.
 
-```{r fig3, echo=FALSE, fig.cap="Figura 3: Completude dos dados notificados de Dengue (A) e Chikungunya (B) até a semana 27/2025", warning=FALSE}
+
+## Análise da qualidade dos dados para geolocalização
+
+Para a realização das análises foram utilizados os dados do SINAN Online agregados em três níveis: municipal, distrito de saúde e bairro.  A agregação dos casos por bairro utilizou a variável “NM_BAIRRO”, pois esta apresentou a  maior completude (superior ou igual a 70%) durante o processo de avaliação prévia dos dados (Figura 3). Primeiramente foi realizada padronização dos nomes devido a diferentes grafias ou erros de escrita e remoção das notificações as quais os nomes dos bairros divergiam muito da grafia oficial ou que não constavam da lista dos 43 bairros oficiais. Além disso, para correta agregação dos casos por bairro também foram utilizados os arquivos shapefile dos bairros e distritos, dados populacionais para bairros e a listagem do nome dos bairros padronizada e correta.
+
+```{r fig3, echo=FALSE, fig.cap=paste0("Figura 3: Completude dos dados notificados de Dengue (A) e Chikungunya (B) até a ", week_atual), warning=FALSE}
 fig3
 
 ```
 
-## Informação perdida
-
-A tabela 1 apresenta as informações sobre o número de casos notificados perdidos e o seu percentual em relação ao número de casos totais nas últimas 3 semanas epidemiológicas para dengue e chikungunya. Os casos perdidos correspondem às notificações que não puderam ser alocadas em um determinado bairro devido à falta de preenchimento da variável NM_BAIRRO ou do seu preenchimento com informações muito divergentes à lista de referência (composta por 43 bairros oficiais) e/ou não possuía o preenchimento da variável “ID_BAIRRO”. A figura 4 demonstra a informação perdida na série temporal do ano passado e ano atual.
+A tabela 1 apresenta as informações sobre o número de casos notificados perdidos e o seu percentual em relação ao número de casos totais nas últimas 3 semanas epidemiológicas para dengue e chikungunya. Os casos perdidos correspondem às notificações que não puderam ser alocadas em um determinado bairro devido à falta de preenchimento da variável NM_BAIRRO ou do seu preenchimento com informações muito divergentes à lista de referência (composta por 43 bairros oficiais) e/ou não possuía o preenchimento da variável “ID_BAIRRO”. A figura 4 mostra  a informação perdida na série temporal do ano passado e ano atual.
 
 
 ```{r echo=FALSE}
 tab1_ok
 ```
 
-## Situação Recente das Arboviroses
 
-Esse boletim analisa as condições de transmissão das arboviroses. utilizando dados de clima (Copernicus ERA 5) e a notificação de casos fornecidos semanalmente pela CGARB/SVS/MS. A partir desses dados são analisadas as condições de receptividade climática, transmissão e incidência (ver definição), tendo como objetivo contribuir para a tomada de decisão na sala de situação.
+```{r echo=FALSE, fig.cap=paste0("Figura 4: Número de dados notificados e perdidos de dengue (A) e chikungunya (B) até a ", week_atual)}
+fig4
+
+```
+
+## Análise da situação das arboviroses 
+
+Esse boletim analisa as condições de transmissão das arboviroses  utilizando dados de clima (Copernicus ERA 5) e de notificação de casos (SINAN) fornecidos semanalmente pela CGARB/SVS/MS. A partir desses dados são analisadas as condições de receptividade climática, transmissão e incidência (ver descrição no final do relatório), tendo como objetivo contribuir para a tomada de decisão na sala de situação.
+A seguir, são apresentados os resultados das análises em três níveis espaciais: nível do município, distritos e bairros.
+
+## Limiar epidêmico
+
+A tabela abaixo categoriza a incidência do município quanto ao limiar epidêmico estabelecido utilizando dados históricos. Valores superiores à 72,4 casos por 100 mil habitantes indicam o estabelecimento de uma epidemia.
+
+## Situação recente das Arboviroses a nível do município
+
 
 Esse ano foram notificados até o momento, `r casos_acumulado_atual_dengon` casos das arboviroses monitoradas, o que corresponde a uma incidência acumulada de `r inc_acumulado_dengon` casos por 100.000 habitantes. Esse valor corresponde a 14,8 % do registrado no ano passado, no mesmo período.
 
 ## Casos notificados, incidência e variação de casos
 
-A tabela abaixo sumariza, considerando até a mesma semana epidemiológica `r week_atual` em relação ao ano anterior, os casos notificados acumulados, a incidência acumulada por 100 mil habitantes e, para comparação, a proporção de casos acumulados em relação aos notificados no ano passado.
+A tabela abaixo sumariza, em relação às últimas 3 semanas epidemiológicas (`r ultimas_3_semanas`), o número de casos observados, casos estimados, a incidência por 100 mil habitantes, o total de casos acumulados e o nível de alerta calculados.
 
 ```{r tab1, echo=FALSE, out.width="100%"}
 tab2_ok
-fig4
+
 
 ```
 
-A tabela abaixo sumariza, considerando até as três últimas semanas epidemiológicas do ano corrente (SE 30, 31 e 32), os casos notificados, a incidência acumulada por 100 mil habitantes, os casos estimados, a receptividade climática e o nível de alerta para comparação.
+A figuras 5 mostra o perfil de incidência de dengue e chikungunya na cidade e as cores indicam o nível de atenção da semana epidemiológica. A descrição do código de cores e a relação entre o nível de atenção do Infodengue com o nível de atenção do Plano de Contingência Nacional estão descritos na tabela em anexo.
 
-```{r tab2, echo=FALSE}
- tab3_ok
-
-```
-
-A figuras 4 mostra o perfil de incidência de dengue e chikungunya na cidade e as cores indicam o nível de atenção da semana epidemiológica. A descrição do código de cores e a relação entre o nível de atenção do Infodengue com o nível de atenção do Plano de Contingência Nacional estão descritos na tabela em anexo.
-
-```{r fig4, echo=FALSE, fig.cap="Figura 4: Curva de incidência de Dengue (A) e Chikungunya (B) - Joinville/SC até SE 32/2025", fig.height=8}
+```{r fig5, echo=FALSE, fig.cap=paste0("Figura 5: Curva de incidência de Dengue (A) e Chikungunya (B) - Joinville/SC até a", week_atual, ". A linha azul representa o número de casos observados e a linha vermelha horizontal o limiar epidêmico (incidência superior a 72,4 casos por 100 mil habitantes)."), fig.height=8}
 fig5
 
 ```
 
-A tabela abaixo traz um resumo sobre o padrão de variação do número de casos notificados, número de semanas com condições favoráveis para a transmissão e número de semanas com transmissão efetiva observados nesse ano em relação aos casos do ano passado, considerando até a mesma semana epidemiológica (SE 32):
+## Perfil sazonal da receptividade climática 
 
-```{r tab3, echo=FALSE}
- tab4_ok
-
-```
-
-## Limiar Epidêmico
-
-A figura 5 mostra respectivamente as curvas de incidência de casos de dengue e chikungunya para o município, bem como as faixas de atenção relacionadas ao limiar epidêmico estabelecido utilizando dados históricos. As faixas verde e vermelho indicam, respectivamente, incidência abaixo e acima do limiar pré-epidêmico da cidade.
-
-```{r tab4, echo=FALSE}
- tab5_ok
+O perfil sazonal da receptividade climática no município para a transmissão das arboviroses é calculado a partir dos dados meteorológicos e indicam períodos do ano em que há maior risco de transmissão de arboviroses. A figura 6 apresenta uma escala de receptividade que varia de 0 (período pouco receptivo) a 100 (período muito receptivo) sendo que, períodos muito receptivos, marcam a sazonalidade da doença. Observa-se que o período receptivo típico no município ocorre entre as semanas 45 e 15, que corresponde ao período com temperaturas mínimas acima de 18 graus.
 
 
+```{r echo=FALSE, fig.cap = paste0("Figura 6: Receptividade climática e temperatura  mínima do município até a ", week_atual, ".A linha amarela corresponde à variação da temperatura mínima durante o período. A área azul corresponde a período com receptividade climática favorável à transmissão de arboviroses, enquanto a área cinza a receptividade abaixo do limiar favorável.")}
+
+fig6 
 
 ```
 
-```{r fig6, echo=FALSE, fig.cap="Figura 6 : Nível de atenção de Dengue (A) e Chikungunya (B) em cada semana epidemiológica do município.", fig.height=8}
-fig6
 
-```
+## Comparação da sazonalidade atual com anos anteriores
 
-## Perfil Sazonal da Transmissão das Arboviroses
+O perfil sazonal das séries temporais de incidência de casos de dengue e chikungunya nos últimos 10 e 5 anos, respectivamente, estão representadas na figura 7 e podem ser comparadas com a incidência desse ano (marcado em vermelho).
 
-O perfil sazonal das arboviroses está representado nos gráficos abaixo. O perfil sazonal da receptividade climática para o município (figura 6) apresenta uma escala que varia de 0 (período pouco receptivo) a 100 (período muito receptivo) sendo que, períodos muito receptivos, marcam a sazonalidade da doença. A linha amarela corresponde à variação da temperatura mínima durante o período, as barras azuis correspondem às semanas as quais a receptividade climática do município esteve acima do limiar favorável à transmissão de arboviroses.    
-
-
-```{r fig7, echo=FALSE, fig.cap="Figura 7: Receptividade climática do município e temperatura mínima até SE 32/2025", fig.height=6, message=FALSE, warning=FALSE}
+```{r fig7, echo=FALSE, fig.cap="Comparação da incidência do ano atual com anteriores para dengue (A) e chikungunya (B)", fig.height=6, message=FALSE, warning=FALSE}
 fig7
 
 ```
 
-O perfil sazonal das séries temporais de incidência de casos de dengue nos últimos 10 anos e chikungunya 5 anos estão representadas na figura 7 e podem ser comparadas com a incidência desse ano (marcado em vermelho).
+## Número reprodutivo
 
-```{r fig8, echo=FALSE, fig.cap="Figura 8: Comparação da incidência do ano atual com do ano passado para Dengue (A) e Chikungunya (B)", fig.height=8}
+O perfil de transmissibilidade da dengue (figura 8) é medido pelo número reprodutivo, Rt. Valores dessa métrica maiores que 1 ou mais de 3 semanas seguidas indicam transmissão sustentada de dengue (figura 8A) ou chikungunya (figura 8B).
+
+```{r, echo=FALSE, fig.cap=paste0("Figura 8: Número reprodutivo semanal de Dengue (A) e Chikungunya (B) para o município estimado até a ", week_atual)}
 fig8
-
 ```
 
-O perfil de transmissibilidade (figura 8) descreve o número reprodutivo médio ao longo do ano e valores maiores que 1 indicam histórico de risco, especialmente se ocorrerem em sequência. O número reprodutivo médio dos casos de dengue (figura 8A) foi calculado ao longo dos últimos 10 anos, enquanto chikungunya (figura 8B) dos últimos 5 anos. 
 
-```{r fig9, echo=FALSE, fig.cap="Figura 9: Número reprodutivo semanal de Dengue (A) e Chikungunya (B) para o município estimado até SE 32/2025", fig.height=8}
-fig9
+# Situação das Arboviroses nos Distritos de Saúde
 
-```
-
-# Distritos
-
-## Situação Recente das Arboviroses
-### Casos notificados e variação dos casos
+## Casos notificados, incidência e variação de casos
 
 ### Dengue
 
-A tabela abaixo sumariza, considerando até a mesma semana epidemiológica (SE 32) em relação ao ano anterior, os casos notificados, a incidência acumulada por 100 mil habitantes e, para comparação, a proporção de casos acumulados em relação aos notificados no ano passado.
-
-```{r tab6, echo=FALSE}
-tab6_ok
+A tabela abaixo sumariza, em relação às últimas 3 semanas epidemiológicas (`r ultimas_3_semanas`) e para cada distrito, o número de casos observados, casos estimados, a incidência por 100 mil habitantes, o total de casos acumulados e o nível de alerta calculados.
 
 
-```
+```{r tab3, echo=FALSE}
+tab3_ok
 
-A tabela abaixo sumariza, considerando até as três últimas semanas epidemiológicas do ano corrente (SE 30, 31 e 32) e cada um dos Distritos de Saúde, o número de casos acumulados, o número de casos notificados, os casos estimados e a incidência acumulada por 100 mil habitantes e o nível de alerta para comparação.
-
-```{r tab7, echo=FALSE, fig.cap="Nota: Os quatro níveis de alerta do Infodengue e a relação com o nível de atenção do Plano de Contingência Nacional estão descritos na tabela em anexo."}
-tab7_ok
 
 ```
 
 A figuras 9 mostra o perfil de incidência de dengue nos Distritos de Saúde e as cores indicam o nível de atenção da semana epidemiológica. O código de cores indica o nível de alerta da semana epidemiológica. 
 
-```{r fig10, echo=FALSE, fig.cap="Figura 10: Curva de incidência de Dengue para os Distritos Centro, Norte e Sul até a SE 32/2025", fig.height=11}
+```{r fig9, echo=FALSE, fig.cap=paste0("Figura 9: Curva de incidência de Dengue para os Distritos Centro, Norte e Sul até a", week_atual, "A linha azul representa o número de casos notificados e a linha vermelha horizontal o limiar epidêmico (incidência superior a 72,4 casos por 100 mil habitantes)."), fig.height=11}
+fig9
+
+```
+
+A figura 10 ilustra a incidência por 100 mil habitantes dos casos notificados de dengue agregados pelos Distrito de Saúde em Joinville, entre as `r ultimas_3_semanas` de `r ano_atual` . Para cada semana é apresentada a porcentagem de casos notificados que não puderam ser alocados em nenhum Distrito de Saúde devido a problemas no preenchimento ou ausência de informação sobre o local de ocorrência dos casos.
+
+
+```{r fig10, echo=FALSE, fig.cap="Figura 10: Incidência de dengue (casos por 100.000 habitantes) nos distritos nas últimas 3 semanas epidemiológicas", fig.height=8}
 fig10
-
-```
-
-A figura 10 ilustra a incidência por 100 mil habitantes dos casos notificados de dengue agregados pelos Distrito de Saúde em Joinville, entre as semanas epidemiológicas 30 e 32 de 2025 . Para cada semana é apresentada a porcentagem de casos notificados que não puderam ser alocados em nenhum Distrito de Saúde devido a problemas no preenchimento ou ausência de informação sobre o local de ocorrência dos casos.
-
-```{r fig11, echo=FALSE, fig.cap="Figura 11: Incidência de dengue (casos por 100.000 habitantes) nos distritos nas últimas 3 semanas epidemiológicas", fig.height=8}
-fig11
-
-```
-
-#### Chikungunya
-
-A tabela abaixo sumariza, considerando até a mesma semana epidemiológica (SE 32) em relação ao ano anterior, os casos notificados de chikungunya, a incidência acumulada por 100 mil habitantes e, para comparação, a proporção de casos acumulados em relação aos notificados no ano passado.
-
-
-```{r tab8, echo=FALSE}
-#tab8_ok
-
-```
-
-A tabela abaixo sumariza, considerando até as três últimas semanas epidemiológicas do ano corrente (SE 30, 31 e 32) e cada um dos Distritos, o número de casos acumulados, o número de casos notificados, os casos estimados e a incidência acumulada por 100 mil habitantes e o nível de alerta para comparação.
-
-```{r tab9, echo=FALSE}
-#tab9_ok
-
-```
-
-```{r fig12, echo=FALSE, fig.cap="Figura 12: Curva de incidência de Chikungunya para os Distritos Centro, Norte e Sul até a SE 32/2025", fig.height=11}
-fig12
-
-```
-
-A figura 12 ilustra a incidência por 100 mil habitantes dos casos notificados de chikungunya agregados pelos Distrito de Saúde em Joinville, entre as semanas epidemiológicas 30 e 32 de 2025 . Para cada semana é apresentada a porcentagem de casos notificados que não puderam ser alocados em nenhum Distrito de Saúde devido a problemas no preenchimento ou ausência de informação sobre o local de ocorrência dos casos.
-
-```{r fig13, echo=FALSE, fig.cap="Figura 13: Incidência de Chikungunya (casos por 100.000 habitantes) nos distritos nas últimas 3 semanas epidemiológicas", fig.height=8}
-fig13
-
-```
-
-### Limiar epidêmico distritos
-
-A figura 13 mostra respectivamente as curvas de incidência de casos de dengue e chikungunya para os Distritos de Saúde, bem como as faixas de atenção relacionadas ao limiar epidêmico estabelecido, utilizando os dados históricos. As faixas verde e vermelho indicam, respectivamente, incidência abaixo e acima do limiar pré-epidêmico da cidade.
-
-```{r fig14, echo=FALSE, fig.cap="Figura 14: Nível de atenção de cada semana epidemiológica do município por distrito e arbovirose", fig.height=8}
-fig14
-
-```
-
-## Perfil Sazonal das Arboviroses
-
-O perfil sazonal das arboviroses está representado nos gráficos abaixo. O perfil sazonal da receptividade climática para os Distritos de Saúde (figura 14) apresenta uma escala que varia de 0 (período pouco receptivo) a 100 (período muito receptivo) sendo que, períodos muito receptivos, marcam a sazonalidade da doença. A linha amarela corresponde à variação da temperatura mínima durante o período, as barras azuis correspondem às semanas as quais a receptividade climática do município esteve acima do limiar favorável à transmissão de arboviroses.
-
-```{r downscaling, echo=FALSE}
-
-```
-
-O perfil sazonal das séries temporais de incidência de casos de dengue nos últimos 10 anos (Figura 15A-C) e chikungunya 5 anos (Figura 15D-E) para cada um dos Distritos e podem ser comparadas com a incidência desse ano (marcado em vermelho).
-
-```{r fig15, echo=FALSE, fig.cap="Figura 15: Comparação da incidência de dengue dos Distritos do ano atual com do ano passado", fig.height=8}
-fig15
-```
-
-
-O perfil de transmissibilidade descreve o número reprodutivo médio ao longo do ano e valores maiores que 1 indicam histórico de risco, especialmente se ocorrerem em sequência. O número reprodutivo médio dos casos de dengue (Figura 15) foi calculado ao longo dos últimos 10 anos, enquanto chikungunya (Figura 16) dos últimos 5 anos. 
-
-```{r fig16, echo=FALSE, fig.cap="Figura 16: Número reprodutivo de dengue por Distrito semanal estimado até SE 32/2025", fig.height=8}
-fig16
-
-```
-
-```{r fig17, echo=FALSE, fig.cap="Figura 17: Número reprodutivo de chikungunya por Distrito semanal estimado até SE 32/2025", fig.height=8}
-fig17
-
-```
-
-# Bairros
-
-## Situação recente das arboviroses
-
-### dengue
-
-A tabela abaixo apresenta os 10 bairros com maior carga epidemiológica na semana atual, detalhando número de casos notificados, incidência, Rt, nível de alerta e número de semanas com nível de alerta crítico (níveis laranja e vermelho) nas últimas 5 semanas. 
-
-```{r tab10, echo=FALSE}
-tab10_ok
-
-```
-
-A figura 17 mostra o perfil de incidência de dengue nos três bairros que apresentaram a maior incidência na semana atual e as cores indicam o nível de atenção da semana epidemiológica. O código de cores indica o nível de alerta da semana epidemiológica. 
-
-```{r fig18, echo=FALSE, fig.cap="Figura 18: Curva de incidência de Dengue nos bairros de maior incidência na semana 32/2025", fig.height=11}
-fig18
-
-```
-
-
-A figura 18 ilustra a incidência por 100 mil habitantes dos casos notificados de dengue agregados por bairros em Joinville, entre as semanas epidemiológicas 30 e 32 de 2025. Para cada semana é apresentada a porcentagem de casos notificados que não puderam ser alocados em nenhum bairro devido a problemas no preenchimento ou ausência de informação sobre o local de ocorrência dos casos.
-
-```{r fig19, echo=FALSE, fig.cap="Figura 19: Incidência de Dengue nos bairros nas últimas 3 semanas epidemiológicas", fig.height=8}
-fig19
 
 ```
 
 ### Chikungunya
 
-A tabela abaixo apresenta os 10 bairros com maior carga epidemiológica na semana atual, detalhando número de casos notificados, incidência, Rt, nível de alerta e frequência de permanência em baixo risco nas últimas 10 semanas.
+A tabela abaixo sumariza, em relação às últimas 3 semanas epidemiológicas (`r ultimas_3_semanas`)  e para cada distrito, o número de casos observados, casos estimados, a incidência por 100 mil habitantes, o total de casos acumulados e o nível de alerta calculados.
+
+
+```{r tab8, echo=FALSE}
+tab4_ok
+
+```
+
+A figura 11 mostra o perfil de incidência de chikungunya nos Distritos de Saúde e as cores indicam o nível de atenção da semana epidemiológica. O código de cores indica o nível de alerta da semana epidemiológica. 
+
+
+```{r fig11, echo=FALSE, fig.cap="Figura 13: Incidência de Chikungunya (casos por 100.000 habitantes) nos distritos nas últimas 3 semanas epidemiológicas. A linha azul representa o número de casos notificados.", fig.height=8}
+fig11
+
+```
+
+A figura 12 ilustra a incidência por 100 mil habitantes dos casos notificados de chikungunya agregados pelos Distrito de Saúde em Joinville, entre as `r ultimas_3_semanas` de `r ano_atual`. Para cada semana é apresentada a porcentagem de casos notificados que não puderam ser alocados em nenhum Distrito de Saúde devido a problemas no preenchimento ou ausência de informação sobre o local de ocorrência dos casos.
+
+```{r echo=FALSE, fig.cap="Figura 12: Incidência de chikungunya (casos por 100.000 habitantes) nos distritos nas últimas 3 semanas epidemiológicas", fig.height=8}
+fig12
+```
+
+
+## Perfil sazonal da transmissão das Arboviroses
+
+O perfil sazonal das arboviroses está representado nos gráficos abaixo. O perfil sazonal da receptividade climática para os Distritos de Saúde (figura 13) apresenta uma escala que varia de 0 (período pouco receptivo) a 100 (período muito receptivo) sendo que, períodos muito receptivos, marcam a sazonalidade da doença.
+
+```{r downscaling, echo=FALSE, fig.cap=paste0("Figura 13: Receptividade climática e temperatura mínima por distrito das últimas cinco SE. A linha amarela corresponde a temperatura mínima do município e as linhas verde, vermelha e azul para os distritos em específico. A área azul corresponde a período com receptividade climática favorável à transmissão de arboviroses, enquanto a área cinza a receptividade abaixo do limiar favorável.")}
+
+fig13
+```
+
+O perfil sazonal das séries temporais de incidência de casos de dengue e chikungunya nos últimos 2 anos, respectivamente, para cada um dos Distritos, estão representadas na figura 14 e podem ser comparadas com a incidência desse ano (marcado em vermelho).
+
+
+```{r fig14, echo=FALSE, fig.cap="Figura 14: Comparação da incidência de dengue dos Distritos do ano atual com do ano passado", fig.height=8}
+fig14
+```
+
+
+O perfil de transmissibilidade para estas arboviroses (figura 15 e 16) é medido pelo número reprodutivo (Rt), calculado para cada distrito. Valores dessa métrica maiores que 1 ou mais de 3 semanas seguidas indicam transmissão sustentada de dengue ou chikungunya.
+
+
+```{r fig15, echo=FALSE, fig.cap=paste0("Figura 16: Número reprodutivo de dengue por Distrito semanal estimado até a", week_atual), fig.height=8}
+fig15
+
+```
+
+```{r fig16, echo=FALSE, fig.cap=paste0("Figura 16: Número reprodutivo de chikungunya por Distrito semanal estimado até a", week_atual), fig.height=8}
+fig16
+
+```
+
+# Análise dos 10 Bairros com maior notificação
+
+## Casos notificados, incidência e variação do risco
+
+### dengue
+
+A tabela 5 apresenta os 10 bairros com maior incidência de dengue e chikungunya atual, detalhando número de casos notificados, incidência, Rt, nível de alerta e número de semanas com nível de alerta de “Transmissão sustentada” e “Alta atividade”
+
+```{r tab5, echo=FALSE}
+tab5_ok
+
+```
+
+A figura 17 mostra o perfil de incidência de dengue nos três bairros que apresentaram a maior incidência na semana atual e as cores indicam o nível de atenção da semana epidemiológica. O código de cores indica o nível de alerta da semana epidemiológica. 
+
+
+```{r fig17, echo=FALSE, fig.cap=paste0("Figura 17: Curva de incidência de dengue nos bairros de maior incidência na", week_atual,". A linha azul representa o número de casos notificados"), fig.height=11}
+fig17
+
+```
+
+
+A figura 18 ilustra a incidência por 100 mil habitantes dos casos notificados de dengue agregados por bairros em Joinville, entre as `r ultimas_3_semanas` de `r ano_atual`. Para cada semana é apresentada a porcentagem de casos notificados que não puderam ser alocados em nenhum bairro devido a problemas no preenchimento ou ausência de informação sobre o local de ocorrência dos casos.
+
+```{r fig18, echo=FALSE, fig.cap="Figura 19: Incidência de dengue nos bairros nas últimas 3 semanas epidemiológicas", fig.height=8}
+fig18
+
+```
+
+### Chikungunya
+
+A tabela 6 apresenta os 10 bairros com maior carga epidemiológica na semana atual, detalhando número de casos notificados, incidência, Rt, nível de alerta e frequência de permanência em baixo risco nas últimas 10 semanas.
+
 
 ```{r tab11, echo=FALSE}
-#tab11_ok
+tab6_ok
 
 ```
 
 A figura 19 mostra o perfil de incidência de chikungunya nos três bairros que apresentaram a maior incidência na semana atual e as cores indicam o nível de atenção da semana epidemiológica. O código de cores indica o nível de alerta da semana epidemiológica. 
 
-```{r fig20, echo=FALSE, fig.cap="Figura 20: Curva de incidência de Chikungunya nos bairros de maior incidência na semana 32/2025", fig.height=11}
-fig20
+```{r fig19, echo=FALSE, fig.cap=paste0("Figura 19: Curva de incidência de chikungunya nos bairros de maior incidência na", week_atual,". A linha azul representa o número de casos notificados"), fig.height=11}
+fig19
 
 ```
 
 
-A figura 20 ilustra a incidência por 100 mil habitantes dos casos notificados de chikungunya agregados por bairros em Joinville, entre as semanas epidemiológicas 30 e 32 de 2025. Para cada semana é apresentada a porcentagem de casos notificados que não puderam ser alocados em nenhum bairro devido a problemas no preenchimento ou ausência de informação sobre o local de ocorrência dos casos.
+A figura 20 ilustra a incidência por 100 mil habitantes dos casos notificados de chikungunya agregados por bairros em Joinville, entre as `r ultimas_3_semanas` de `r ano_atual`. Para cada semana é apresentada a porcentagem de casos notificados que não puderam ser alocados em nenhum bairro devido a problemas no preenchimento ou ausência de informação sobre o local de ocorrência dos casos.
 
-```{r fig21, echo=FALSE, fig.cap="Figura 21: Incidência nos bairros nas últimas 3 semanas epidemiológicas", fig.height=8}
-fig21
+
+```{r fig20, echo=FALSE, fig.cap="Figura 20: Incidência nos bairros nas últimas 3 semanas epidemiológicas", fig.height=8}
+fig20
 
 ```
 
